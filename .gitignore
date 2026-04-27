@@ -1,0 +1,28 @@
+# 환경 변수 / 비밀 키
+.env
+*.env
+
+# Python
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+
+# 다운로드 데이터 (대용량)
+data/
+
+# 로그
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit 캐시
+.streamlit/

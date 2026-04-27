@@ -1,0 +1,24 @@
+# DB
+psycopg2-binary
+sqlalchemy
+
+# 데이터 수집/가공
+pandas
+requests
+beautifulsoup4
+
+# 분석
+scipy
+statsmodels
+scikit-learn
+
+# API
+fastapi
+uvicorn
+
+# 대시보드
+streamlit
+plotly
+
+# 유틸
+python-dotenv
