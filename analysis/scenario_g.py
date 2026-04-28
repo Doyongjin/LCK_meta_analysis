@@ -112,14 +112,23 @@ def get_team_profile(team_name: str, season_id: str | None = None) -> dict:
             ORDER BY pth.role
         """), season_params_pth).fetchall()
 
-    # 선수별 밴 내성
+    # 선수별 밴 내성 (연결 재사용)
+    from .scenario_f import _get_player_raw_stats, _compute_ban_resistance, get_position_averages
     players_data = []
     br_scores = []
-    for pname, pos in players_rows:
-        br = get_ban_resistance(pname, team_name)
-        score = br.get("ban_resistance_score", 50.0)
-        br_scores.append(score)
-        players_data.append({"player": pname, "position": pos, "ban_resistance": score})
+    with engine.connect() as conn2:
+        for pname, pos in players_rows:
+            pid_row = conn2.execute(
+                text("SELECT player_id FROM players WHERE summoner_name = :n"),
+                {"n": pname}
+            ).fetchone()
+            if not pid_row:
+                continue
+            raw = _get_player_raw_stats(pid_row[0], tid, conn2, season_id)
+            pos_avg = get_position_averages(pos, conn2, season_id)
+            score = _compute_ban_resistance(raw, pos_avg)
+            br_scores.append(score)
+            players_data.append({"player": pname, "position": pos, "ban_resistance": score})
 
     br_avg = float(np.mean(br_scores)) if br_scores else 50.0
     color = classify_team(br_avg, float(g15 or 0), object_rate, float(red_wr or 0))

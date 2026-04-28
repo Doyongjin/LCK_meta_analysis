@@ -737,6 +737,16 @@ def show_scenario_f(fn, players, player_positions, season_id=None):
 # ─────────────────────────────────────────────
 # G. 팀 색깔 프로파일
 # ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def _cached_team_profile(team_name, season_id):
+    from analysis.scenario_g import get_team_profile
+    return get_team_profile(team_name, season_id)
+
+@st.cache_data(ttl=3600)
+def _cached_all_team_profiles(season_id):
+    from analysis.scenario_g import get_all_team_profiles
+    return get_all_team_profiles(season_id)
+
 def show_scenario_g(fn_single, fn_all, teams, season_id=None):
     st.title("G. 팀 색깔 프로파일")
 
@@ -778,8 +788,8 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
             return
 
         with st.spinner("분석 중..."):
-            r1 = fn_single(team1, season_id)
-            r2 = fn_single(team2, season_id)
+            r1 = _cached_team_profile(team1, season_id)
+            r2 = _cached_team_profile(team2, season_id)
 
         for r in (r1, r2):
             if "error" in r:
@@ -876,7 +886,7 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
         if not st.button("전체 분석", key="g_all_run"):
             return
         with st.spinner("전체 팀 분석 중..."):
-            results = fn_all(season_id)
+            results = _cached_all_team_profiles(season_id)
 
         import plotly.express as px
         import pandas as pd
