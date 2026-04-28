@@ -34,32 +34,36 @@ with st.sidebar:
     st.caption("⚠️ 데이터 다운로드 및 DB 새로고침은 2시간에 1번만 가능합니다.")
 
     if _remaining <= 0:
+        _pw_input = st.text_input("관리자 비밀번호", type="password", key="admin_pw")
         if st.button("⬇️ 데이터 다운로드 + DB 로드", use_container_width=True):
-            dl_errors = []
-            with st.spinner("Oracle's Elixir 데이터 다운로드 중..."):
-                try:
-                    from etl.download_oracles_elixir import download_csv
-                    for y in [2024, 2025, 2026]:
-                        download_csv(y)
-                except Exception as e:
-                    dl_errors.append(str(e))
-            if dl_errors:
-                st.warning(f"다운로드 일부 실패 (오늘 파일 없을 수 있음): {dl_errors[0][:200]}")
+            _correct_pw = st.secrets.get("ADMIN_PASSWORD", "")
+            if not _pw_input or _pw_input != _correct_pw:
+                st.error("비밀번호가 틀렸습니다.")
+            else:
+                dl_errors = []
+                with st.spinner("Oracle's Elixir 데이터 다운로드 중..."):
+                    try:
+                        from etl.download_oracles_elixir import download_csv
+                        for y in [2024, 2025, 2026]:
+                            download_csv(y)
+                    except Exception as e:
+                        dl_errors.append(str(e))
+                if dl_errors:
+                    st.warning(f"다운로드 일부 실패 (오늘 파일 없을 수 있음): {dl_errors[0][:200]}")
 
-            with st.spinner("DB에 데이터 로드 중... (수분 소요)"):
-                try:
-                    from etl.load_to_db import run_etl
-                    for y in [2024, 2025, 2026]:
-                        run_etl(y)
-                    st.success("✅ 데이터 로드 완료!")
-                except Exception as e:
-                    st.error(f"ETL 오류: {str(e)[:500]}")
+                with st.spinner("DB에 데이터 로드 중... (수분 소요)"):
+                    try:
+                        from etl.load_to_db import run_etl
+                        for y in [2024, 2025, 2026]:
+                            run_etl(y)
+                        st.success("✅ 데이터 로드 완료!")
+                    except Exception as e:
+                        st.error(f"ETL 오류: {str(e)[:500]}")
 
-            st.cache_data.clear()
-            st.cache_resource.clear()
-            st.session_state["last_db_refresh"] = _time.time()
-            st.rerun()
-
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                st.session_state["last_db_refresh"] = _time.time()
+                st.rerun()
     else:
         _rem_h = int(_remaining // 3600)
         _rem_m = int((_remaining % 3600) // 60)
