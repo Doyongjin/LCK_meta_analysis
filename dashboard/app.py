@@ -194,6 +194,15 @@ def show_home():
 def show_scenario_a(fn, players, player_positions, season_id=None):
     st.title("A. 핵심 챔피언 밴 시 승률 영향")
 
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+- **표시 지표**: 선수의 주력 챔피언이 밴당했을 때의 승률 vs 밴 안 됐을 때 승률
+- **양수(빨강 막대)**: 주력 챔피언이 밴당하면 승률이 떨어진다 → **저격 밴이 유효한 선수**
+- **음수(파랑 막대)**: 밴당해도 오히려 승률이 올라간다 → 챔프폭이 넓거나 대체 챔이 더 강함
+- **0 근처**: 밴 영향 없음 → 안정적
+- **주의**: 밴당한 경기 수가 적으면 극단값(0%, 100%)이 나오므로 **표본 수**를 함께 봐야 함
+""")
+
     col1, col2, col3 = st.columns([3, 3, 1])
     with col1:
         player = st.selectbox("선수 선택", players, key="a_p1")
@@ -265,6 +274,14 @@ def show_scenario_a(fn, players, player_positions, season_id=None):
 def show_scenario_b(fn, players, player_positions, season_id=None):
     st.title("B. 진영별 챔피언 선택 변화")
 
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+- **표시 지표**: 블루(선픽) 진영 vs 레드(후픽) 진영에서 선수가 자주 픽하는 챔피언
+- **블루-레드 챔피언이 다름**: 선수가 진영에 따라 픽 전략을 바꾼다 (예: 블루는 카운터당하기 쉬운 챔, 레드는 카운터픽)
+- **블루-레드 챔피언이 비슷함**: 진영과 무관하게 챔프풀이 일관됨
+- **활용**: 상대팀 분석 시 우리 진영에 따라 어떤 챔피언이 풀리지 예측
+""")
+
     player, compare = _player_compare_ui(players, player_positions, "b")
 
     if not st.button("분석", key="b_run"):
@@ -317,6 +334,16 @@ def show_scenario_c(fn):
     st.title("C. 패치 적응 속도")
     st.caption("패치 출시 후 강챔을 얼마나 빠르게 픽에 반영하는지 (낮을수록 빠름)")
 
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+- **표시 지표**: 새 패치의 메타 챔피언을 팀이 처음 픽하기까지 걸린 평균 경기 수
+- **낮을수록(빠를수록) 좋음**: 메타 변화에 빠르게 적응 → 코칭 스태프의 분석력
+- **0~3경기**: 매우 빠름 (선제 대응)
+- **4~7경기**: 평균
+- **8경기 이상**: 느림 (다른 팀 따라가기)
+- **활용**: 신규 패치 직후 어느 팀이 메타 우위를 점할지 예측
+""")
+
     if not st.button("분석", key="c_run"):
         return
 
@@ -345,6 +372,16 @@ def show_scenario_c(fn):
 def show_scenario_d(fn, teams, season_id=None):
     st.title("D. 저격 밴 패턴")
 
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+- **표시 지표**: 상대팀이 우리 선수의 주력 챔피언을 1~3순위 밴(global_order ≤ 6)에 얼마나 자주 사용했는지
+- **저격 밴율 높음(40%+)**: 상대팀이 의식적으로 견제 → **위협적인 선수**
+- **저격 밴율 낮음**: 상대팀이 위협으로 보지 않거나, 챔프폭이 넓어서 견제 의미 없음
+- **피어리스 게임별 분리**: 1경기 vs 3경기 밴 패턴이 구조적으로 다름
+  - 3경기 밴은 1-2경기에서 픽된 챔피언이 자동 제외된 상태에서 이뤄짐
+- **활용**: 어떤 선수/챔피언이 메타에서 OP로 인식되는지 파악
+""")
+
     col1, col2 = st.columns(2)
     with col1:
         team1 = st.selectbox("팀 선택", teams, key="d_t1")
@@ -369,7 +406,7 @@ def show_scenario_d(fn, teams, season_id=None):
                     st.write(champ["champion"])
                 with cb:
                     st.metric(
-                        "저격 밴율",
+                        "저격 밴율 (전체)",
                         f"{champ['snipe_ban_rate']:.1%}",
                         f"{champ['snipe_ban_count']}/{champ['total_games_available']}경기"
                     )
@@ -378,6 +415,21 @@ def show_scenario_d(fn, teams, season_id=None):
                             [f"{o['team']}({o['count']})" for o in champ["opponents"][:3]]
                         )
                         st.caption(f"주요 저격팀: {opps}")
+
+                    # 피어리스 게임 번호별 분리 표시
+                    by_game = champ.get("by_game", {})
+                    fearless_total = champ.get("fearless_games_available", 0)
+                    if by_game and fearless_total > 0:
+                        with st.expander(f"피어리스 게임별 밴 패턴 (총 {fearless_total}경기)"):
+                            cols = st.columns(len(by_game))
+                            for idx, (gn, data) in enumerate(sorted(by_game.items(), key=lambda x: int(x[0]))):
+                                with cols[idx]:
+                                    st.metric(
+                                        f"{gn}경기",
+                                        f"{data['rate']:.1%}",
+                                        f"{data['count']}/{data['available']}",
+                                    )
+                            st.caption("3경기 밴율은 1-2경기 픽으로 자동 제외된 챔피언 풀에서 계산됨")
             st.divider()
 
     with st.spinner("분석 중..."):
@@ -401,6 +453,16 @@ def show_scenario_d(fn, teams, season_id=None):
 # ─────────────────────────────────────────────
 def show_scenario_e(fn, patches):
     st.title("E. 패치별 승리 공식")
+
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+- **표시 지표**: 로지스틱 회귀로 학습한 "어떤 지표가 승리에 기여하는가"의 가중치(coefficient)
+- **양수 가중치**: 그 지표가 높을수록 **승리 확률 상승** (예: 첫 드래곤 +0.8 → 첫 드래곤 잡으면 승리 가능성↑)
+- **음수 가중치**: 그 지표가 높을수록 패배 확률 (해당 패치에서는 의미 없는 지표)
+- **절댓값이 클수록**: 승패에 미치는 영향이 큼
+- **패치별 차이**: 패치마다 메타가 달라져서 "이번 패치는 첫 타워가 중요" 등 변화
+- **활용**: 현재 패치에서 우선순위로 챙겨야 할 오브젝트/지표 파악
+""")
 
     # 내부 ID → 공개 명칭 매핑 (e.g. "16.08" → "26.8")
     patch_display_map = {p: _patch_public(p) for p in patches}
@@ -438,23 +500,60 @@ def show_scenario_e(fn, patches):
 # ─────────────────────────────────────────────
 # F. 밴 내성 지수
 # ─────────────────────────────────────────────
-def show_scenario_f(fn, players, teams, player_positions, season_id=None):
+def show_scenario_f(fn, players, player_positions, season_id=None):
     st.title("F. 밴 내성 지수")
+
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+**밴 내성 지수란?** 0~100점. 주력 챔피언을 밴당해도 선수가 얼마나 잘 버틸 수 있는지를 측정.
+
+#### 점수 구성 (가중치)
+| 요소 | 가중치 | 의미 |
+|---|---|---|
+| 챔피언 풀 | 25% | 시즌 내 사용한 챔피언 종류 (1경기 이상) |
+| 주력 의존도 | 28% | 가장 많이 쓴 챔피언이 전체 경기에서 차지하는 비율 (낮을수록 좋음) |
+| 밴 시 승률 하락 | 27% | 주력 사용 불가 시 승률이 얼마나 떨어지는지 |
+| 골드 변동성 증가 | 20% | 주력 사용 불가 시 15분 골드의 표준편차 증가폭 |
+
+#### 점수 해석
+- **70점 이상**: 밴 내성 매우 높음 → 챔프폭 넓고 대체 챔피언으로도 강함
+- **50점 근처**: 라인 평균 수준
+- **30점 이하**: 특정 챔피언에 의존 → 저격 밴이 효과적
+
+#### 각 지표 해석
+- **밴 시 승률 유지(=hr_drop)**:
+  - **0%**: 주력과 대체 챔의 실력 차 거의 없음 (밴해도 무의미)
+  - **10~20%**: 평균적인 영향
+  - **30%+**: 주력 의존 매우 강함 → 저격 밴이 결정적
+- **골드 변동성 증가**:
+  - **0~50**: 주력 없어도 안정적 운영
+  - **50~100**: 중간 영향
+  - **+100 이상**: 주력 없으면 팀 전체 흔들림 (스타 선수형 OR 챔프폭 부족)
+- **챔피언 풀 + 골드 변동성** 함께 보기:
+  - 풀 5개+ & 변동성 큼 → **팀이 그 선수에게 의존**
+  - 풀 2-3개 & 변동성 큼 → **챔프폭 부족 약점**
+
+#### 주의사항
+⚠️ **표본 부족 시 극단값**: 시즌이 짧거나 밴당한 경기가 적으면 0% 또는 100% 같은 극단값이 나올 수 있음. 카드 하단의 "사용 불가 사유" 경기 수가 3개 미만이면 신뢰도 낮음.
+
+#### 피어리스 보정
+주력 챔피언 "사용 불가"는 두 가지를 합산:
+- 상대팀의 밴
+- 같은 시리즈 앞 경기에서 우리 팀이 이미 픽 (피어리스 규정)
+""")
 
     col1, col2 = st.columns(2)
     with col1:
         player = st.selectbox("선수 선택", players, key="f_p1")
-        team1 = st.selectbox("소속 팀 (선택)", ["(없음)"] + teams, key="f_t1")
     with col2:
         pos = player_positions.get(player, "")
         same = _same_pos_options(player, players, player_positions)
         compare_raw = st.selectbox(f"비교 선수 ({pos} 포지션)",
                                    ["(없음)"] + same, key="f_p2")
         compare = None if compare_raw == "(없음)" else compare_raw
-        team2 = st.selectbox("비교 선수 팀 (선택)", ["(없음)"] + teams, key="f_t2")
 
-    team_name1 = None if team1 == "(없음)" else team1
-    team_name2 = None if team2 == "(없음)" else team2
+    team_name1 = None
+    team_name2 = None
 
     if not st.button("분석", key="f_run"):
         return
@@ -505,11 +604,18 @@ def show_scenario_f(fn, players, teams, player_positions, season_id=None):
         cx1, cx2 = st.columns(2)
         cx1.metric(f"{r1['primary_champion']} 픽 시 팀 골드 표준편차",
                    f"{r1['gold15_stddev_normal']:.0f}골드")
-        cx2.metric("밴됐을 때 팀 골드 표준편차",
+        cx2.metric("주력 사용 불가 시 팀 골드 표준편차",
                    f"{r1['gold15_stddev_banned']:.0f}골드",
                    delta=f"+{r1['gold15_volatility_delta']:.0f}" if r1["gold15_volatility_delta"] > 0 else "변화 없음",
                    delta_color="inverse")
         st.caption("표준편차가 높을수록 팀 전술이 흔들리는 신호")
+
+    with st.expander("주력 챔피언 사용 불가 사유 (피어리스 보정)"):
+        bc1, bc2, bc3 = st.columns(3)
+        bc1.metric("상대 밴", f"{r1.get('banned_games_count', 0)}경기")
+        bc2.metric("피어리스 앞 경기 픽", f"{r1.get('prev_used_games_count', 0)}경기")
+        bc3.metric("총 사용 불가", f"{r1.get('blocked_games_count', 0)}경기")
+        st.caption("피어리스 시리즈에서 같은 챔피언을 앞 경기에 이미 썼다면 후속 경기에선 강제로 다른 챔피언을 픽해야 합니다. 이 경우도 '주력 사용 불가'로 집계됩니다.")
 
     # 레이더 차트 (비교 시 오버레이)
     fig = go.Figure()
@@ -542,6 +648,31 @@ def show_scenario_f(fn, players, teams, player_positions, season_id=None):
 # ─────────────────────────────────────────────
 def show_scenario_g(fn_single, fn_all, teams, season_id=None):
     st.title("G. 팀 색깔 프로파일")
+
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+**팀 색깔이란?** 팀의 경기 스타일을 4가지 유형으로 분류.
+
+#### 팀 색깔 분류
+| 색깔 | 조건 | 의미 |
+|---|---|---|
+| **시스템형** | 밴 내성 평균 65+ | 선수 전원의 챔프폭이 넓어 어떤 픽이든 운영 가능 |
+| **초반 압박형** | 15분 골드 우위 +500↑ & 오브젝트율 55%+ | 빠른 라인전 우위로 스노우볼 |
+| **캐리 의존형** | 밴 내성 평균 40↓ | 특정 선수의 주력 챔에 의존 → 저격 밴에 약함 |
+| **후반 역전형** | 그 외 | 초반은 안정, 후반 한타로 게임 결정 |
+
+#### 레이더 차트 해석
+- **블루/레드 WR**: 진영 편향 (한쪽이 너무 강하면 진영 의존적)
+- **선픽/후픽 WR**: 픽 순서 편향
+- **밴 내성**: 팀 평균 (선수들의 적응력)
+- **오브젝트율**: 첫 드래곤/전령/타워 선점 비율
+
+#### 활용
+- **상대팀 분석**: 캐리 의존형 → 저격 밴 효과적 / 시스템형 → 다른 전략 필요
+- **자기팀 진단**: 약점 지표 확인
+- **주의**: 밴 내성은 개인 역량 합산이라 팀 전체적으로 높게 나오기 쉬움 (절대값보다 팀 간 상대 비교가 의미 있음)
+""")
+
     mode = st.radio("모드", ["두 팀 비교", "전체 팀 분포"])
 
     if mode == "두 팀 비교":
@@ -639,6 +770,9 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
         df2 = pd.DataFrame(r2["players"]).assign(team=team2) if r2["players"] else pd.DataFrame()
         if not df1.empty or not df2.empty:
             df_all = pd.concat([df1, df2], ignore_index=True)
+            pos_order = {"top": 0, "jng": 1, "mid": 2, "bot": 3, "sup": 4}
+            df_all["pos_rank"] = df_all["position"].map(pos_order)
+            df_all = df_all.sort_values(["pos_rank", "player"]).drop("pos_rank", axis=1)
             fig_bar = px.bar(
                 df_all, x="player", y="ban_resistance", color="team",
                 barmode="group", title="선수별 밴 내성 점수",
@@ -684,6 +818,37 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
 # ─────────────────────────────────────────────
 def show_scenario_h(fn, players, player_positions, season_id=None):
     st.title("H. 스페셜리스트 챔피언")
+
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+**스페셜리스트란?** LCK 같은 라인 평균 대비 이 선수가 유독 잘하는 챔피언.
+
+#### 산정 기준 (최소 3경기)
+- **초과 승률 (excess_wr × 50)**: 선수 승률 - 라인 평균 승률
+- **15분 골드 우위 (gold_adv / 200 × 30)**: 평균보다 골드를 더 잘 벌어옴
+- **골드 안정성 (stab_adv / 100 × 20)**: 표준편차가 낮을수록 안정적
+
+#### 점수 해석
+- **specialist_score 60+**: 명확한 스페셜리스트 (의도적 픽 가치 있음)
+- **30~60**: 평균 이상 (선택지 중 하나)
+- **30 이하**: 큰 차이 없음
+
+#### 차트 해석 (산점도)
+- **X축(초과 승률)**: 오른쪽일수록 평균보다 잘함
+- **Y축(15분 골드 우위)**: 위쪽일수록 라인전 우위
+- **버블 크기**: 경기 수 (크면 표본 신뢰도↑)
+- **오른쪽 위 영역**: 가장 이상적인 스페셜리스트 챔피언
+
+#### 피어리스 보정 (⚠️ 강제픽 의심)
+피어리스 시리즈 후반 경기(2/3경기)에서 픽한 비율이 50% 이상이면 **강제픽 가능성**:
+- 1-2경기에서 주력 챔이 이미 사용됨 → 어쩔 수 없이 픽
+- "스페셜리스트"가 아니라 "어쩔 수 없는 선택"일 수 있음
+- 표에 ⚠️ 아이콘 표시
+
+#### 활용
+- 메타 챔피언 외에도 이 선수만의 무기 발견
+- 상대 분석 시 "이 선수의 의외 픽" 대비
+""")
 
     player, compare = _player_compare_ui(players, player_positions, "h")
 
@@ -740,13 +905,17 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
         col1, col2 = st.columns(2)
 
         def _table(df, name):
-            display = df[[
+            tmp = df.copy()
+            tmp["강제픽 의심"] = tmp["likely_forced_pick"].apply(lambda x: "⚠️" if x else "")
+            display = tmp[[
                 "champion", "games", "player_wr", "lck_avg_wr", "excess_wr",
                 "gold15_advantage", "gold15_stability_advantage", "specialist_score",
+                "fearless_late_games", "강제픽 의심",
             ]].copy()
             display.columns = [
                 "챔피언", "게임수", "선수 WR", "LCK 평균 WR", "초과 WR",
                 "골드 우위", "안정성 우위", "점수",
+                "피어리스 후반픽", "강제픽 의심",
             ]
             st.subheader(name)
             st.dataframe(display, hide_index=True)
@@ -755,6 +924,7 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
             _table(df1, player)
         with col2:
             _table(df2, compare)
+        st.caption("⚠️ = 피어리스 후반(2/3경기) 픽이 50% 이상 → 강제 픽일 가능성, 스페셜리스트 신뢰도 낮음")
 
     else:
         # 단일 선수
@@ -777,18 +947,23 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
         st.plotly_chart(fig, use_container_width=True)
         st.caption("색이 초록일수록 평균보다 골드 변동이 적음 / 버블 크기 = 플레이 횟수")
 
-        display_df = df1[[
+        df1_disp = df1.copy()
+        df1_disp["강제픽 의심"] = df1_disp["likely_forced_pick"].apply(lambda x: "⚠️" if x else "")
+        display_df = df1_disp[[
             "champion", "games", "player_wr", "lck_avg_wr", "excess_wr",
             "player_gold15", "lck_avg_gold15", "gold15_advantage",
             "player_gold15_stddev", "lck_avg_gold15_stddev", "gold15_stability_advantage",
             "specialist_score",
+            "fearless_late_games", "강제픽 의심",
         ]].copy()
         display_df.columns = [
             "챔피언", "게임수", "선수 승률", "LCK 평균 승률", "초과 승률",
             "선수 골드15", "LCK 평균 골드15", "골드 우위",
             "선수 골드 표준편차", "LCK 평균 표준편차", "안정성 우위", "스페셜리스트 점수",
+            "피어리스 후반픽", "강제픽 의심",
         ]
         st.dataframe(display_df, hide_index=True)
+        st.caption("⚠️ = 피어리스 후반(2/3경기) 픽이 50% 이상 → 강제 픽일 가능성, 스페셜리스트 신뢰도 낮음")
 
 
 # ─────────────────────────────────────────────
@@ -813,7 +988,7 @@ try:
     elif page == "E. 패치별 승리 공식":
         show_scenario_e(fns["win_formula"], lists["patches"])
     elif page == "F. 밴 내성 지수":
-        show_scenario_f(fns["ban_resistance"], lists["players"], lists["teams"],
+        show_scenario_f(fns["ban_resistance"], lists["players"],
                         lists["player_positions"], season_id)
     elif page == "G. 팀 색깔 프로파일":
         show_scenario_g(fns["team_profile"], fns["all_team_profiles"],

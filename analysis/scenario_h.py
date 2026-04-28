@@ -2,6 +2,9 @@
 시나리오 H — 스페셜리스트 챔피언 판별
 LCK 동일 라인 평균 대비 이 선수가 유독 잘하는 챔피언 식별
 기준: 최소 플레이 횟수 + 초과 승률 + 15분 지표 우위 + Gold@15 안정성(낮은 표준편차)
+
+피어리스 보정: 챔피언별로 "피어리스 시리즈 후반(2/3경기) 픽 비율" 표시
+  - 후반 경기 픽이 높으면 강제 픽일 가능성 → 스페셜리스트 신뢰도 하락
 """
 from sqlalchemy import text
 from .db import get_engine
@@ -14,12 +17,7 @@ def get_specialist_champions(player_name: str,
     """
     선수의 스페셜리스트 챔피언 목록
     season_id 지정 시 해당 시즌 게임만 집계 (LCK 평균도 동일 시즌 기준)
-    반환:
-    {
-      "player": str,
-      "position": str,
-      "specialists": [...]
-    }
+    피어리스 후반 경기 픽 비율을 보조 지표로 제공
     """
     engine = get_engine()
     with engine.connect() as conn:
@@ -48,6 +46,7 @@ def get_specialist_champions(player_name: str,
             )"""
             s_params_base["sid"] = season_id
 
+        # 선수 챔피언별 통계 + 피어리스 후반(>=2경기) 픽 카운트
         player_stats = conn.execute(text(f"""
             SELECT
                 gp.champion_id,
@@ -55,9 +54,15 @@ def get_specialist_champions(player_name: str,
                 COUNT(*) AS games,
                 AVG(gt.result::int) AS player_wr,
                 AVG(gp.gold_at_15) AS player_gold15,
-                STDDEV(gp.gold_at_15) AS player_gold15_stddev
+                STDDEV(gp.gold_at_15) AS player_gold15_stddev,
+                SUM(CASE
+                      WHEN ser.draft_type = 'fearless' AND g.game_number >= 2 THEN 1
+                      ELSE 0
+                    END) AS fearless_late_games
             FROM game_participants gp
-            JOIN game_teams gt ON gt.game_id = gp.game_id AND gt.team_id = gp.team_id
+            JOIN game_teams gt  ON gt.game_id = gp.game_id AND gt.team_id = gp.team_id
+            JOIN games g        ON g.game_id = gp.game_id
+            JOIN series ser     ON ser.series_id = g.series_id
             LEFT JOIN champions c ON c.champion_id = gp.champion_id
             WHERE gp.player_id = :pid
               AND gp.champion_id IS NOT NULL
@@ -92,7 +97,7 @@ def get_specialist_champions(player_name: str,
 
     specialists = []
     for row in player_stats:
-        cid, icon, games, p_wr, p_g15, p_g15_std = row
+        cid, icon, games, p_wr, p_g15, p_g15_std, fearless_late = row
         lck = lck_map.get(cid, {"wr": 0.5, "gold15": 0.0, "gold15_stddev": 0.0})
 
         excess_wr = float(p_wr or 0) - lck["wr"]
@@ -100,6 +105,12 @@ def get_specialist_champions(player_name: str,
         stab_adv  = lck["gold15_stddev"] - float(p_g15_std or 0)
 
         score = (excess_wr * 50) + (g15_adv / 200 * 30) + (stab_adv / 100 * 20)
+
+        # 피어리스 후반 픽 비율 (강제 픽 가능성 지표)
+        fl_late = int(fearless_late or 0)
+        forced_ratio = round(fl_late / games, 3) if games > 0 else 0.0
+        # 후반 픽이 50% 이상이면 강제 픽 의심
+        likely_forced = forced_ratio >= 0.5
 
         if excess_wr > 0 or g15_adv > 0 or stab_adv > 0:
             specialists.append({
@@ -116,6 +127,10 @@ def get_specialist_champions(player_name: str,
                 "lck_avg_gold15_stddev": round(lck["gold15_stddev"], 1),
                 "gold15_stability_advantage": round(stab_adv, 1),
                 "specialist_score": round(float(score), 2),
+                # 피어리스 보정 정보
+                "fearless_late_games": fl_late,
+                "forced_pick_ratio": forced_ratio,
+                "likely_forced_pick": likely_forced,
             })
 
     specialists.sort(key=lambda x: x["specialist_score"], reverse=True)

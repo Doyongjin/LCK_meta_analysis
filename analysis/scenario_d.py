@@ -1,6 +1,7 @@
 """
 시나리오 D — 저격 밴 패턴
 특정 팀을 상대할 때 상대방이 밴 1~3순위에 우리 팀 선수 주력 챔피언을 집중하는 패턴
+피어리스 드래프트의 경우 게임 번호별(1/2/3경기) 밴 패턴을 따로 집계
 """
 from sqlalchemy import text
 from .db import get_engine
@@ -21,10 +22,17 @@ def get_snipe_ban_matrix(team_name: str, season_id: str | None = None) -> dict:
             {
               "champion": str,
               "icon_url": str,
-              "total_games_available": int,
-              "snipe_ban_count": int,
-              "snipe_ban_rate": float,
-              "opponents": [{"team": str, "count": int}]
+              "total_games_available": int,        # 전체 (피어리스+표준)
+              "snipe_ban_count": int,               # 전체 저격 밴 횟수
+              "snipe_ban_rate": float,              # 전체 저격 밴율
+              "opponents": [{"team": str, "count": int}],
+              "by_game": {                          # 피어리스만 게임 번호별 분리
+                "1": {"count": int, "available": int, "rate": float},
+                "2": {"count": int, "available": int, "rate": float},
+                "3": {"count": int, "available": int, "rate": float},
+                ...
+              },
+              "fearless_games_available": int       # 피어리스 시리즈 총 경기 수
             }
           ]
         }
@@ -78,6 +86,25 @@ def get_snipe_ban_matrix(team_name: str, season_id: str | None = None) -> dict:
                 WHERE s2.season_id = :sid
             )"""
 
+        # 우리 팀의 게임 번호별 경기 수 (피어리스만)
+        team_params: dict = {"tid": tid}
+        if season_id:
+            team_params["sid"] = season_id
+
+        fearless_games_by_num = conn.execute(text(f"""
+            SELECT g.game_number, COUNT(DISTINCT g.game_id) AS cnt
+            FROM games g
+            JOIN series ser ON ser.series_id = g.series_id
+            JOIN game_teams gt ON gt.game_id = g.game_id AND gt.team_id = :tid
+            WHERE ser.draft_type = 'fearless'
+            {s_game_filter}
+            GROUP BY g.game_number
+            ORDER BY g.game_number
+        """), team_params).fetchall()
+
+        fearless_available_by_num = {int(r[0]): int(r[1]) for r in fearless_games_by_num}
+        fearless_total = sum(fearless_available_by_num.values())
+
         result_players = []
         for player_name, position in players:
             player = conn.execute(
@@ -105,7 +132,7 @@ def get_snipe_ban_matrix(team_name: str, season_id: str | None = None) -> dict:
                 LIMIT 3
             """), base).fetchall()
 
-            # 팀 총 경기 수 (해당 시즌)
+            # 팀 총 경기 수 (전체, 해당 시즌)
             total_available = conn.execute(text(f"""
                 SELECT COUNT(DISTINCT g.game_id)
                 FROM games g
@@ -122,45 +149,68 @@ def get_snipe_ban_matrix(team_name: str, season_id: str | None = None) -> dict:
                 # 시즌 필터를 our_games CTE에 적용
                 season_our_games_filter = ""
                 if season_id:
-                    season_our_games_filter = "AND g.game_id IN (SELECT g2.game_id FROM games g2 JOIN series s2 ON s2.series_id = g2.series_id WHERE s2.season_id = :sid)"
+                    season_our_games_filter = """AND g.game_id IN (
+                        SELECT g2.game_id FROM games g2
+                        JOIN series s2 ON s2.series_id = g2.series_id
+                        WHERE s2.season_id = :sid
+                    )"""
 
-                snipe_data = conn.execute(text(f"""
+                # 게임 번호 + 드래프트 타입까지 함께 가져옴
+                snipe_rows = conn.execute(text(f"""
                     WITH our_games AS (
-                        SELECT DISTINCT g.game_id, ser.team1_id, ser.team2_id,
+                        SELECT DISTINCT g.game_id, g.game_number, ser.draft_type,
                                gt.team_id AS our_team_id
                         FROM games g
                         JOIN series ser ON ser.series_id = g.series_id
                         JOIN game_teams gt ON gt.game_id = g.game_id AND gt.team_id = :tid
                         {season_our_games_filter}
-                    ),
-                    opponent_early_bans AS (
-                        SELECT pb.game_id, pb.champion_id, pb.team_id AS opp_team_id,
-                               pb.global_order
-                        FROM picks_bans pb
-                        JOIN our_games og ON og.game_id = pb.game_id
-                        WHERE pb.team_id != :tid
-                          AND pb.phase = 'ban'
-                          AND pb.global_order <= 6
                     )
                     SELECT
-                        oeb.opp_team_id,
-                        t.name AS opp_team,
-                        COUNT(*) AS snipe_count,
-                        (SELECT COUNT(DISTINCT game_id) FROM our_games) AS total_games
-                    FROM opponent_early_bans oeb
-                    JOIN teams t ON t.team_id = oeb.opp_team_id
-                    WHERE oeb.champion_id = :cid
-                    GROUP BY oeb.opp_team_id, t.name
-                    ORDER BY snipe_count DESC
+                        pb.team_id        AS opp_team_id,
+                        t.name            AS opp_team,
+                        og.game_number,
+                        og.draft_type
+                    FROM picks_bans pb
+                    JOIN our_games og  ON og.game_id = pb.game_id
+                    JOIN teams t       ON t.team_id = pb.team_id
+                    WHERE pb.team_id != :tid
+                      AND pb.phase = 'ban'
+                      AND pb.global_order <= 6
+                      AND pb.champion_id = :cid
                 """), snipe_params).fetchall()
+
+                # 파이썬에서 집계
+                opp_count: dict = {}
+                game_num_count: dict = {}  # 피어리스만
+                snipe_total = 0
+
+                for row in snipe_rows:
+                    opp_id, opp_name, game_num, draft_type = row
+                    snipe_total += 1
+                    opp_count[opp_name] = opp_count.get(opp_name, 0) + 1
+                    if draft_type == "fearless" and game_num is not None:
+                        gn = int(game_num)
+                        game_num_count[gn] = game_num_count.get(gn, 0) + 1
+
+                opponents = [
+                    {"team": name, "count": cnt}
+                    for name, cnt in sorted(opp_count.items(), key=lambda x: -x[1])
+                ]
+
+                # 게임 번호별 breakdown (피어리스 한정)
+                by_game = {}
+                for gn, available in fearless_available_by_num.items():
+                    cnt = game_num_count.get(gn, 0)
+                    by_game[str(gn)] = {
+                        "count": cnt,
+                        "available": available,
+                        "rate": round(cnt / available, 3) if available > 0 else 0.0,
+                    }
 
                 icon = conn.execute(
                     text("SELECT icon_url FROM champions WHERE champion_id = :cid"),
                     {"cid": champ_id}
                 ).scalar()
-
-                snipe_total = sum(r[2] for r in snipe_data)
-                opponents = [{"team": r[1], "count": r[2]} for r in snipe_data]
 
                 champ_results.append({
                     "champion": champ_id,
@@ -169,6 +219,8 @@ def get_snipe_ban_matrix(team_name: str, season_id: str | None = None) -> dict:
                     "snipe_ban_count": snipe_total,
                     "snipe_ban_rate": round(snipe_total / total_available, 3) if total_available > 0 else 0.0,
                     "opponents": opponents,
+                    "by_game": by_game,
+                    "fearless_games_available": fearless_total,
                 })
 
             result_players.append({
