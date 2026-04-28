@@ -10,7 +10,16 @@ from datetime import datetime
 from pathlib import Path
 
 OFFICIAL_HOST = "oracleselixir-downloadable-match-data.s3-us-west-2.amazonaws.com"
-RAW_DATA_DIR = Path(__file__).parent.parent / "data" / "raw"
+_DEFAULT_RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
+_TMP_RAW_DIR = Path("/tmp/lck_raw")
+
+def _raw_dir() -> Path:
+    if _DEFAULT_RAW_DIR.exists():
+        return _DEFAULT_RAW_DIR
+    _TMP_RAW_DIR.mkdir(parents=True, exist_ok=True)
+    return _TMP_RAW_DIR
+
+RAW_DATA_DIR = _raw_dir()
 
 def verify_official_url(url: str) -> bool:
     """AWS S3 공식 경로인지 검증"""

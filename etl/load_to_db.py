@@ -2,22 +2,30 @@
 Oracle's Elixir CSV -> PostgreSQL ETL
 2024/2025/2026 LCK 경기 데이터를 DB 스키마에 맞게 재구성해서 삽입
 """
-import os
+import sys
 import math
 import pandas as pd
 from pathlib import Path
-from dotenv import load_dotenv
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
-load_dotenv()
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
+_DEFAULT_RAW_DIR = Path(__file__).parent.parent / "data" / "raw"
+_TMP_RAW_DIR = Path("/tmp/lck_raw")
 
-CSV_FILES = {
-    2024: RAW_DIR / "2024_LoL_esports_match_data_from_OraclesElixir.csv",
-    2025: RAW_DIR / "2025_LoL_esports_match_data_from_OraclesElixir.csv",
-    2026: RAW_DIR / "2026_LoL_esports_match_data_from_OraclesElixir.csv",
-}
+def _raw_dir() -> Path:
+    """Streamlit Cloud는 /tmp 사용, 로컬은 data/raw 사용"""
+    if _DEFAULT_RAW_DIR.exists():
+        return _DEFAULT_RAW_DIR
+    _TMP_RAW_DIR.mkdir(parents=True, exist_ok=True)
+    return _TMP_RAW_DIR
+
+def _csv_path(year: int) -> Path:
+    for d in [_DEFAULT_RAW_DIR, _TMP_RAW_DIR]:
+        p = d / f"{year}_LoL_esports_match_data_from_OraclesElixir.csv"
+        if p.exists():
+            return p
+    return _raw_dir() / f"{year}_LoL_esports_match_data_from_OraclesElixir.csv"
 
 # 픽 순서 매핑 (글로벌 픽 슬롯 1~10)
 # 선픽팀 pick1~5 -> 글로벌 슬롯
@@ -31,11 +39,8 @@ RED_BAN_MAP  = {"ban1": 2, "ban2": 4, "ban3": 6, "ban4": 7, "ban5": 9}
 
 
 def get_engine():
-    url = (
-        f"postgresql://{os.getenv('DB_USER')}:{os.getenv('DB_PASSWORD')}"
-        f"@{os.getenv('DB_HOST')}:{os.getenv('DB_PORT')}/{os.getenv('DB_NAME')}"
-    )
-    return create_engine(url)
+    from analysis.db import get_engine as _get_engine
+    return _get_engine()
 
 
 def val(v):
@@ -393,7 +398,7 @@ def insert_player_team_history(conn, df, team_map):
 
 
 def run_etl(year: int):
-    csv_path = CSV_FILES[year]
+    csv_path = _csv_path(year)
     if not csv_path.exists():
         print(f"[건너뜀] 파일 없음: {csv_path}")
         return
