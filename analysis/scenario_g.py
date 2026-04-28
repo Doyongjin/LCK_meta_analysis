@@ -149,11 +149,31 @@ def get_team_profile(team_name: str, season_id: str | None = None) -> dict:
 
 
 def get_all_team_profiles(season_id: str | None = None) -> list:
-    """LCK 전 팀 프로파일 목록"""
+    """LCK 전 팀 프로파일 목록 — 해당 시즌에 실제 경기가 있는 팀만"""
     engine = get_engine()
     with engine.connect() as conn:
-        teams = conn.execute(
-            text("SELECT name FROM teams WHERE region = 'LCK' ORDER BY name")
-        ).fetchall()
+        if season_id:
+            teams = conn.execute(text("""
+                SELECT DISTINCT t.name FROM teams t
+                JOIN game_teams gt ON gt.team_id = t.team_id
+                JOIN games g ON g.game_id = gt.game_id
+                JOIN series s ON s.series_id = g.series_id
+                WHERE t.region = 'LCK' AND s.season_id = :sid
+                ORDER BY t.name
+            """), {"sid": season_id}).fetchall()
+        else:
+            # 전체 선택 시 가장 최신 시즌 기준 활성 팀만
+            teams = conn.execute(text("""
+                SELECT DISTINCT t.name FROM teams t
+                JOIN game_teams gt ON gt.team_id = t.team_id
+                JOIN games g ON g.game_id = gt.game_id
+                JOIN series s ON s.series_id = g.series_id
+                WHERE t.region = 'LCK'
+                  AND s.season_id = (
+                      SELECT season_id FROM series
+                      ORDER BY season_id DESC LIMIT 1
+                  )
+                ORDER BY t.name
+            """)).fetchall()
 
     return [get_team_profile(t[0], season_id) for t in teams]
