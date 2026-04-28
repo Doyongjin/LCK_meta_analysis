@@ -20,6 +20,60 @@ with st.sidebar:
     st.caption("메타 · 팀 · 선수 분석")
     st.divider()
 
+    # DB 새로고침 버튼 (2시간 쿨다운)
+    import time as _time
+    _COOLDOWN = 2 * 3600  # 7200초
+
+    if "last_db_refresh" not in st.session_state:
+        st.session_state["last_db_refresh"] = 0.0
+
+    _now = _time.time()
+    _elapsed = _now - st.session_state["last_db_refresh"]
+    _remaining = _COOLDOWN - _elapsed
+
+    st.caption("⚠️ 데이터 다운로드 및 DB 새로고침은 2시간에 1번만 가능합니다.")
+
+    if _remaining <= 0:
+        if st.button("⬇️ 데이터 다운로드 + DB 로드", use_container_width=True):
+            import subprocess, sys
+            with st.spinner("Oracle's Elixir 데이터 다운로드 중..."):
+                dl_result = subprocess.run(
+                    [sys.executable, "-c",
+                     "from etl.download_oracles_elixir import download_csv\n"
+                     "import sys; sys.path.insert(0,'f:/LCK')\n"
+                     "for y in [2024,2025,2026]: download_csv(y)"],
+                    capture_output=True, text=True, cwd="f:/LCK"
+                )
+            if dl_result.returncode != 0:
+                st.warning(f"다운로드 일부 실패 (오늘 파일 없을 수 있음):\n{dl_result.stderr[:300]}")
+
+            with st.spinner("DB에 데이터 로드 중... (수분 소요)"):
+                etl_result = subprocess.run(
+                    [sys.executable, "run_etl.py"],
+                    capture_output=True, text=True, cwd="f:/LCK"
+                )
+            if etl_result.returncode == 0:
+                st.success("✅ 데이터 로드 완료!")
+            else:
+                st.error(f"ETL 오류:\n{etl_result.stderr[:500]}")
+
+            st.cache_data.clear()
+            st.cache_resource.clear()
+            st.session_state["last_db_refresh"] = _time.time()
+            st.rerun()
+
+    else:
+        _rem_h = int(_remaining // 3600)
+        _rem_m = int((_remaining % 3600) // 60)
+        _rem_s = int(_remaining % 60)
+        if _rem_h > 0:
+            _rem_str = f"{_rem_h}시간 {_rem_m}분 후"
+        else:
+            _rem_str = f"{_rem_m}분 {_rem_s}초 후"
+        st.button(f"⬇️ 데이터 다운로드 + DB 로드 ({_rem_str})", disabled=True, use_container_width=True)
+
+    st.divider()
+
     from analysis.db import get_engine as _get_engine
     from sqlalchemy import text as _text
     _eng = _get_engine()
