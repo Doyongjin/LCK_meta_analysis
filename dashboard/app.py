@@ -224,8 +224,43 @@ def _player_compare_ui(players: list, positions: dict, key_prefix: str):
 # ─────────────────────────────────────────────
 # 홈
 # ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def _load_last_game():
+    from analysis.db import get_engine
+    from sqlalchemy import text
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(text("""
+            SELECT
+                g.date,
+                t1.name AS team1,
+                t2.name AS team2,
+                tw.name AS winner,
+                s.stage,
+                s.format
+            FROM games g
+            JOIN series s ON g.series_id = s.series_id
+            JOIN teams t1 ON s.team1_id = t1.team_id
+            JOIN teams t2 ON s.team2_id = t2.team_id
+            LEFT JOIN teams tw ON s.winner_team_id = tw.team_id
+            ORDER BY g.date DESC, g.game_id DESC
+            LIMIT 1
+        """)).fetchone()
+    return dict(row._mapping) if row else None
+
+
 def show_home():
     st.title("LCK Victory Formula & Meta Analysis")
+
+    last = _load_last_game()
+    if last:
+        st.info(
+            f"📅 **DB 최신 경기**: {last['date']}  |  "
+            f"**{last['team1']} vs {last['team2']}**"
+            + (f"  |  승리: **{last['winner']}**" if last['winner'] else "")
+            + (f"  |  {last['stage']}" if last['stage'] else "")
+        )
+
     st.markdown("""
 **핵심 질문: "누가 이겼나"가 아닌 "어떤 메타적 선택이 승리를 이끌었나"**
 
