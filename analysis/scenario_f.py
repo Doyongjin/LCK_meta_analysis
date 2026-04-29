@@ -169,17 +169,13 @@ def _get_player_raw_stats(pid: int, tid: int | None, conn,
     }
 
 
-def get_position_averages(position: str, conn, season_id: str | None = None) -> dict:
-    """라인별 LCK 평균 + 분포 통계 (DB에서 실제 계산, 하드코딩 없음)"""
+def get_position_averages(position: str, conn) -> dict:
+    """
+    라인별 LCK 분포 통계 (percentile 기준)
+    분포 기준은 항상 전체 데이터 사용 — 짧은 시즌에서도 안정적인 기준값 유지
+    """
     params: dict = {"pos": position}
-    s_filter = ""
-    if season_id:
-        s_filter = """AND gp.game_id IN (
-            SELECT g.game_id FROM games g
-            JOIN series s ON s.series_id = g.series_id
-            WHERE s.season_id = :sid
-        )"""
-        params["sid"] = season_id
+    s_filter = ""  # 분포 기준은 전체 데이터
 
     # 챔프풀 + 주력 의존도
     pool_rows = conn.execute(text(f"""
@@ -384,7 +380,7 @@ def get_ban_resistance(player_name: str, team_name: str | None = None,
         position = pos_row[0] if pos_row else "mid"
 
         raw = _get_player_raw_stats(pid, team_id, conn, season_id)
-        pos_avg = get_position_averages(position, conn, season_id)
+        pos_avg = get_position_averages(position, conn)
         score, breakdown = _compute_ban_resistance(raw, pos_avg)
 
         conn.execute(text("""
