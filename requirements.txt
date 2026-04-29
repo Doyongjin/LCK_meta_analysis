@@ -20,5 +20,8 @@ uvicorn
 streamlit
 plotly
 
+# PDF 생성
+reportlab
+
 # 유틸
 python-dotenv

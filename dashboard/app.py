@@ -1207,6 +1207,106 @@ def _show_scenario_h_team(roster_fn, specialist_fn, teams, season_id):
     st.caption("⭐ = 스페셜리스트 / 🃏 = 조커 픽 / ⚠️ = 피어리스 강제픽 의심 / 채움 = 스페셜리스트, 테두리 = 일반")
 
 
+def _generate_h_scenario_pdf(player_name, position, results_df):
+    """H 시나리오 분석 결과를 PDF로 생성. 테이블 중심 레이아웃."""
+    from reportlab.lib.pagesizes import A4, landscape
+    from reportlab.lib import colors
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.units import cm
+    from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+    from io import BytesIO
+    from datetime import datetime
+
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer,
+        pagesize=landscape(A4),
+        rightMargin=1*cm, leftMargin=1*cm,
+        topMargin=1*cm, bottomMargin=1*cm,
+    )
+
+    story = []
+    styles = getSampleStyleSheet()
+
+    # 제목
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        textColor=colors.HexColor('#1f77b4'),
+        spaceAfter=6,
+    )
+    story.append(Paragraph(f"H. 스페셜리스트 챔피언 분석 — {player_name} ({position})", title_style))
+    story.append(Paragraph(f"생성일: {datetime.now().strftime('%Y-%m-%d %H:%M')}", styles['Normal']))
+    story.append(Spacer(1, 0.3*cm))
+
+    # 테이블 데이터 준비
+    if len(results_df) > 0:
+        # 각 컬럼을 문자열로 변환하고 지표 포맷팅
+        table_data = [
+            ["챔피언", "경기", "LCK총", "점유율", "선수WR", "LCK평균", "초과WR", "골드우위", "안정성", "점수", "강제픽"],
+        ]
+
+        for _, row in results_df.iterrows():
+            champ = row.get('champion', '')
+            marks = ""
+            if row.get('is_specialist'):
+                marks += "⭐"
+            if row.get('is_joker_pick'):
+                marks += "🃏"
+            if row.get('likely_forced_pick'):
+                marks += "⚠️"
+            champ_label = f"{marks} {champ}".strip() if marks else str(champ)
+
+            table_data.append([
+                champ_label,
+                str(int(row.get('games', 0))),
+                str(int(row.get('lck_total_games', 0))),
+                f"{row.get('joker_share', 0):.0%}",
+                f"{row.get('player_wr', 0):.1%}",
+                f"{row.get('lck_avg_wr', 0):.1%}",
+                f"{row.get('excess_wr', 0):.1%}",
+                f"{row.get('gold15_advantage', 0):.0f}",
+                f"{row.get('gold15_stability_advantage', 0):.0f}",
+                f"{row.get('specialist_score', 0):.1f}",
+                "⚠️" if row.get('likely_forced_pick') else "",
+            ])
+
+        # 테이블 스타일
+        table = Table(table_data, colWidths=[2.2*cm, 0.9*cm, 1.1*cm, 1.2*cm, 1.1*cm, 1.2*cm, 1.2*cm, 1.2*cm, 1.1*cm, 1.1*cm, 0.9*cm])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e6f2ff')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.black),
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 9),
+            ('FONTSIZE', (0, 1), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f9f9f9')]),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]))
+        story.append(table)
+    else:
+        story.append(Paragraph("사용한 챔피언 없음 (최소 3게임 조건 미충족)", styles['Normal']))
+
+    story.append(Spacer(1, 0.5*cm))
+
+    # 범례
+    legend = Paragraph(
+        "⭐ = 수행 스페셜리스트 (평균 대비 잘함) | "
+        "🃏 = 조커 픽 (LCK 70%+ 독점, 1경기는 승률 100%, 2경기+는 50%+) | "
+        "⚠️ = 피어리스 후반 픽 의심 (50%+ 강제픽)",
+        ParagraphStyle('Legend', parent=styles['Normal'], fontSize=8, textColor=colors.grey)
+    )
+    story.append(legend)
+
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
 def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=None, teams=None):
     st.title("H. 스페셜리스트 챔피언")
 
@@ -1357,6 +1457,27 @@ def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=Non
             _table(df2, compare)
         st.caption("⭐ = 수행 스페셜리스트 (평균 대비 잘함) / 🃏 = 조커 픽 (LCK 70%+ 독점, 1경기는 승률 100%·2경기+는 50%+) / ⚠️ = 피어리스 후반 픽 50%+ (강제 픽 의심)")
 
+        # PDF 다운로드 (비교 모드)
+        col_pdf1, col_pdf2 = st.columns(2)
+        with col_pdf1:
+            pdf_data1 = _generate_h_scenario_pdf(player, r1["position"], df1)
+            st.download_button(
+                label="📥 PDF 다운로드",
+                data=pdf_data1,
+                file_name=f"H_스페셜리스트_{player}_{r1['position']}.pdf",
+                mime="application/pdf",
+                key="pdf_p1"
+            )
+        with col_pdf2:
+            pdf_data2 = _generate_h_scenario_pdf(compare, r2["position"], df2)
+            st.download_button(
+                label="📥 PDF 다운로드",
+                data=pdf_data2,
+                file_name=f"H_스페셜리스트_{compare}_{r2['position']}.pdf",
+                mime="application/pdf",
+                key="pdf_p2"
+            )
+
     else:
         # 단일 선수
         fig = px.scatter(
@@ -1404,6 +1525,15 @@ def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=Non
         ]
         st.dataframe(display_df, hide_index=True)
         st.caption("⭐ = 수행 스페셜리스트 / 🃏 = 조커 픽 (LCK 70%+ 독점, 1경기는 승률 100%·2경기+는 50%+) / ⚠️ = 피어리스 후반 픽 50%+ (강제 픽 의심)")
+
+        # PDF 다운로드 버튼
+        pdf_data = _generate_h_scenario_pdf(player, r1["position"], df1)
+        st.download_button(
+            label="📥 PDF 다운로드",
+            data=pdf_data,
+            file_name=f"H_스페셜리스트_{player}_{r1['position']}.pdf",
+            mime="application/pdf"
+        )
 
 
 # ─────────────────────────────────────────────
