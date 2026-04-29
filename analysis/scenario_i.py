@@ -102,20 +102,24 @@ def get_snipe_effectiveness(team_name: str,
                 ORDER BY pth.role
             """), params_base).fetchall()
 
-        # 팀 전체 시리즈 목록
-        all_series = conn.execute(text(f"""
-            SELECT DISTINCT ser.series_id, ser.winner_team_id
-            FROM series ser
-            JOIN games g ON g.series_id = ser.series_id
+        # 팀 전체 시리즈 목록 + 게임 결과 다수결로 시리즈 승리 여부 계산
+        # (series.winner_team_id는 NULL인 경우가 많아 game_teams.result 사용)
+        all_series_rows = conn.execute(text(f"""
+            SELECT g.series_id,
+                   SUM(gt.result::int) AS wins,
+                   COUNT(*) AS total_games
+            FROM games g
             JOIN game_teams gt ON gt.game_id = g.game_id AND gt.team_id = :tid
+            JOIN series ser ON ser.series_id = g.series_id
             WHERE 1=1 {s_filter_series}
+            GROUP BY g.series_id
         """), params_base).fetchall()
 
-        total_series = len(all_series)
-        all_series_ids = [r[0] for r in all_series]
-        # series_id → 우리팀 승리 여부
+        total_series = len(all_series_rows)
+        all_series_ids = [r[0] for r in all_series_rows]
+        # 시리즈 내 게임 승리 수가 절반 초과면 시리즈 승리
         series_win_map = {
-            r[0]: (r[1] == tid) for r in all_series
+            r[0]: (int(r[1]) > int(r[2]) / 2) for r in all_series_rows
         }
 
         result_players = []
