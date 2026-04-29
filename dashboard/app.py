@@ -119,7 +119,7 @@ def load_fns():
     from analysis.scenario_e import get_win_formula
     from analysis.scenario_f import get_ban_resistance
     from analysis.scenario_g import get_team_profile, get_all_team_profiles
-    from analysis.scenario_h import get_specialist_champions
+    from analysis.scenario_h import get_specialist_champions, get_team_roster_by_games
     return {
         "ban_impact": get_ban_impact,
         "side_pref": get_side_champion_preference,
@@ -130,6 +130,7 @@ def load_fns():
         "team_profile": get_team_profile,
         "all_team_profiles": get_all_team_profiles,
         "specialist": get_specialist_champions,
+        "team_roster": get_team_roster_by_games,
     }
 
 
@@ -917,7 +918,98 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
 # ─────────────────────────────────────────────
 # H. 스페셜리스트 챔피언
 # ─────────────────────────────────────────────
-def show_scenario_h(fn, players, player_positions, season_id=None):
+def _show_scenario_h_team(roster_fn, specialist_fn, teams, season_id):
+    """팀 비교 모드 — 포지션별 섹션으로 두 팀 나란히 표시"""
+    import pandas as pd
+
+    POS_LABEL = {"top": "TOP", "jng": "JNG", "mid": "MID", "bot": "BOT", "sup": "SUP"}
+    POS_ORDER = ["top", "jng", "mid", "bot", "sup"]
+
+    col1, col2 = st.columns(2)
+    with col1:
+        team_a = st.selectbox("팀 A", teams, key="h_team_a")
+    with col2:
+        team_b = st.selectbox("팀 B", [t for t in teams if t != team_a], key="h_team_b")
+
+    if not st.button("팀 비교 분석", key="h_team_run"):
+        return
+
+    with st.spinner("로스터 및 챔피언 데이터 로딩 중..."):
+        roster_a = roster_fn(team_a, season_id=season_id)
+        roster_b = roster_fn(team_b, season_id=season_id)
+
+    if "error" in roster_a:
+        st.error(roster_a["error"]); return
+    if "error" in roster_b:
+        st.error(roster_b["error"]); return
+
+    def _champ_label(r):
+        marks = ""
+        if r.get("is_specialist"): marks += "⭐"
+        if r.get("is_joker_pick"): marks += "🃏"
+        return f"{marks} {r['champion']}".strip() if marks else r["champion"]
+
+    def _render_player(player_name, games, is_callup):
+        tag = f" *(콜업, {games}경기)*" if is_callup else f" *({games}경기)*"
+        st.markdown(f"**{player_name}**{tag}")
+        with st.spinner(f"{player_name} 분석 중..."):
+            result = specialist_fn(player_name, season_id=season_id)
+        if "error" in result:
+            st.caption(f"데이터 없음: {result['error']}")
+            return
+        champs = result.get("all_champions", [])
+        if not champs:
+            st.caption("챔피언 데이터 없음")
+            return
+        df = pd.DataFrame(champs)
+        df["챔피언"] = df.apply(_champ_label, axis=1)
+        df["LCK 점유율"] = df["joker_share"].apply(lambda x: f"{x:.0%}")
+        df["강제픽"] = df["likely_forced_pick"].apply(lambda x: "⚠️" if x else "")
+        display = df[["챔피언", "games", "LCK 점유율", "player_wr", "excess_wr",
+                       "gold15_advantage", "specialist_score", "강제픽"]].copy()
+        display.columns = ["챔피언", "경기수", "LCK점유율", "WR", "초과WR",
+                            "골드우위", "점수", "강제픽"]
+        st.dataframe(display, hide_index=True, use_container_width=True)
+
+    for pos in POS_ORDER:
+        label = POS_LABEL[pos]
+        data_a = roster_a["roster"].get(pos)
+        data_b = roster_b["roster"].get(pos)
+
+        if not data_a and not data_b:
+            continue
+
+        st.markdown(f"### {label}")
+        col_a, col_b = st.columns(2)
+
+        with col_a:
+            st.caption(team_a)
+            if data_a:
+                for p in data_a["starters"]:
+                    _render_player(p["player"], p["games"], is_callup=False)
+                for p in data_a["callups"]:
+                    st.markdown("---")
+                    _render_player(p["player"], p["games"], is_callup=True)
+            else:
+                st.caption("데이터 없음")
+
+        with col_b:
+            st.caption(team_b)
+            if data_b:
+                for p in data_b["starters"]:
+                    _render_player(p["player"], p["games"], is_callup=False)
+                for p in data_b["callups"]:
+                    st.markdown("---")
+                    _render_player(p["player"], p["games"], is_callup=True)
+            else:
+                st.caption("데이터 없음")
+
+        st.divider()
+
+    st.caption("⭐ = 스페셜리스트 / 🃏 = 조커 픽 / ⚠️ = 피어리스 강제픽 의심")
+
+
+def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=None, teams=None):
     st.title("H. 스페셜리스트 챔피언")
 
     with st.expander("📖 해석 가이드", expanded=False):
@@ -960,6 +1052,12 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
 - 메타 챔피언 외에도 이 선수만의 무기 발견
 - 상대 분석 시 "이 선수의 의외 픽" 대비
 """)
+
+    mode = st.radio("모드", ["개인 분석", "팀 비교"], horizontal=True, key="h_mode")
+
+    if mode == "팀 비교":
+        _show_scenario_h_team(roster_fn, fn, teams, season_id)
+        return
 
     player, compare = _player_compare_ui(players, player_positions, "h")
 
@@ -1139,7 +1237,8 @@ try:
                         lists["teams"], season_id)
     elif page == "H. 스페셜리스트 챔피언":
         show_scenario_h(fns["specialist"], lists["players"],
-                        lists["player_positions"], season_id)
+                        lists["player_positions"], season_id,
+                        roster_fn=fns["team_roster"], teams=lists["teams"])
 
 except Exception as e:
     st.error(f"DB 연결 실패: {e}")

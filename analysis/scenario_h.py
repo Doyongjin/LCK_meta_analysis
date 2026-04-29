@@ -9,6 +9,70 @@ LCK 동일 라인 평균 대비 이 선수가 유독 잘하는 챔피언 식별
 from sqlalchemy import text
 from .db import get_engine
 
+POS_ORDER = ["top", "jng", "mid", "bot", "sup"]
+
+
+def get_team_roster_by_games(team_name: str, season_id: str | None = None) -> dict:
+    """
+    실제 출전 경기 기반 팀 로스터 반환
+    포지션별 선수 목록 + 경기수, 주전/콜업 구분
+    콜업 기준: 포지션 내 최다 출전자 경기수의 50% 미만
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        team = conn.execute(
+            text("SELECT team_id FROM teams WHERE name = :n OR acronym = :n"),
+            {"n": team_name}
+        ).fetchone()
+        if not team:
+            return {"error": f"팀 없음: {team_name}"}
+        tid = team[0]
+
+        s_filter = ""
+        params: dict = {"tid": tid}
+        if season_id:
+            s_filter = """AND gp.game_id IN (
+                SELECT g.game_id FROM games g
+                JOIN series s ON s.series_id = g.series_id
+                WHERE s.season_id = :sid
+            )"""
+            params["sid"] = season_id
+
+        rows = conn.execute(text(f"""
+            SELECT p.summoner_name, gp.position, COUNT(*) AS games
+            FROM game_participants gp
+            JOIN players p ON p.player_id = gp.player_id
+            JOIN game_teams gt ON gt.game_id = gp.game_id AND gt.team_id = gp.team_id
+            WHERE gt.team_id = :tid
+              AND gp.position IS NOT NULL
+              {s_filter}
+            GROUP BY p.summoner_name, gp.position
+            ORDER BY gp.position, games DESC
+        """), params).fetchall()
+
+    roster: dict = {}
+    for name, pos, games in rows:
+        if pos not in roster:
+            roster[pos] = []
+        roster[pos].append({"player": name, "games": int(games)})
+
+    # 주전/콜업 구분
+    result: dict = {}
+    for pos in POS_ORDER:
+        players = roster.get(pos, [])
+        if not players:
+            continue
+        max_games = players[0]["games"]
+        starters, callups = [], []
+        for p in players:
+            if p["games"] >= max_games * 0.5:
+                starters.append(p)
+            else:
+                callups.append(p)
+        result[pos] = {"starters": starters, "callups": callups}
+
+    return {"team": team_name, "roster": result}
+
 MIN_GAMES = 1                    # 표시 최소 경기수 (1경기부터 표 노출)
 SPECIALIST_MIN_GAMES = 3         # 스페셜리스트 판정에 필요한 최소 표본
 JOKER_MIN_GAMES = 1          # 조커 픽 본인 최소 경기 (1경기면 승률 100% 필수)
