@@ -1340,15 +1340,85 @@ def show_scenario_i(_fn, teams, season_id=None):
     if not st.button("분석", key="i_run"):
         return
 
+    _POS_ORDER_I = ["top", "jng", "mid", "bot", "sup"]
+    _POS_LABEL_I = {"top": "탑", "jng": "정글", "mid": "미드", "bot": "원딜", "sup": "서폿"}
+
+    def _render_champ(champ):
+        import plotly.graph_objects as go
+        c_icon, c_info = st.columns([1, 5])
+        with c_icon:
+            if champ["icon_url"]:
+                st.image(champ["icon_url"], width=48)
+            st.caption(champ["champion"])
+        with c_info:
+            if champ["low_sample"]:
+                st.warning(f"⚠️ 밴된 경기 {champ['banned_games']}경기 — 샘플 부족, 방향성만 참고")
+
+            bwr = champ["banned_game_wr"]
+            nwr = champ["normal_game_wr"]
+            delta = champ["game_wr_delta"]
+
+            if bwr is not None and nwr is not None:
+                fig = go.Figure()
+                fig.add_bar(
+                    x=["밴됐을 때", "픽했을 때"],
+                    y=[bwr * 100, nwr * 100],
+                    marker_color=["#EF553B", "#00CC96"],
+                    text=[f"{bwr:.1%}<br>({champ['banned_games']}경기)",
+                          f"{nwr:.1%}<br>({champ['normal_games']}경기)"],
+                    textposition="outside",
+                )
+                delta_sign = "+" if delta > 0 else ""
+                fig.update_layout(
+                    title=f"게임 승률 비교 | 차이: {delta_sign}{delta:.1%}",
+                    yaxis=dict(range=[0, 110], ticksuffix="%"),
+                    height=240,
+                    margin=dict(t=40, b=10, l=20, r=20),
+                    showlegend=False,
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.caption("게임 승률 비교 데이터 부족")
+
+            swr_snipe = champ["snipe_series_wr"]
+            swr_normal = champ["normal_series_wr"]
+            s_delta = champ["series_wr_delta"]
+            sc1, sc2, sc3 = st.columns(3)
+            sc1.metric(
+                "저격 시리즈 승률",
+                f"{swr_snipe:.1%}" if swr_snipe is not None else "N/A",
+                f"{champ['snipe_series']}시리즈",
+            )
+            sc2.metric(
+                "비저격 시리즈 승률",
+                f"{swr_normal:.1%}" if swr_normal is not None else "N/A",
+                f"{champ['total_series'] - champ['snipe_series']}시리즈",
+            )
+            sc3.metric(
+                "시리즈 WR 차이",
+                f"+{s_delta:.1%}" if s_delta and s_delta > 0
+                else (f"{s_delta:.1%}" if s_delta is not None else "N/A"),
+                "양수 = 밴이 효과적",
+                delta_color="normal" if s_delta and s_delta > 0 else "inverse",
+            )
+
     def _render_team(result):
         if "error" in result:
             st.error(result["error"])
             return
 
-        # 요약 테이블 (가장 효과적인 저격 대상 순)
+        import pandas as pd
+
+        # 포지션 순서로 정렬
+        pos_order_map = {p: i for i, p in enumerate(_POS_ORDER_I)}
+        players_sorted = sorted(
+            result["players"],
+            key=lambda x: pos_order_map.get(x["position"], 99)
+        )
+
+        # 요약 테이블
         summary = result.get("summary", [])
         if summary:
-            import pandas as pd
             df_sum = pd.DataFrame(summary)
             df_sum["게임 WR 차이"] = df_sum["game_wr_delta"].apply(
                 lambda x: f"+{x:.1%}" if x > 0 else f"{x:.1%}"
@@ -1368,79 +1438,19 @@ def show_scenario_i(_fn, teams, season_id=None):
                 }),
                 hide_index=True,
             )
-            st.divider()
 
-        # 선수별 상세
-        for player_data in result["players"]:
-            st.subheader(f"{player_data['player']} ({player_data['position']})")
+        # 포지션별 섹션
+        for player_data in players_sorted:
+            pos = player_data["position"]
+            pos_label = _POS_LABEL_I.get(pos, pos)
+            st.markdown(f"### {pos_label} · {player_data['player']}")
             champs = player_data["champions"]
             if not champs:
                 st.caption("데이터 없음")
+                st.divider()
                 continue
-
             for champ in champs:
-                import plotly.graph_objects as go
-
-                c_icon, c_info = st.columns([1, 5])
-                with c_icon:
-                    if champ["icon_url"]:
-                        st.image(champ["icon_url"], width=48)
-                    st.caption(champ["champion"])
-
-                with c_info:
-                    if champ["low_sample"]:
-                        st.warning(f"⚠️ 밴된 경기 {champ['banned_games']}경기 — 샘플 부족, 방향성만 참고")
-
-                    # 게임 단위 바 차트
-                    bwr = champ["banned_game_wr"]
-                    nwr = champ["normal_game_wr"]
-                    delta = champ["game_wr_delta"]
-
-                    if bwr is not None and nwr is not None:
-                        fig = go.Figure()
-                        fig.add_bar(
-                            x=["밴됐을 때", "픽했을 때"],
-                            y=[bwr * 100, nwr * 100],
-                            marker_color=["#EF553B", "#00CC96"],
-                            text=[f"{bwr:.1%}<br>({champ['banned_games']}경기)",
-                                  f"{nwr:.1%}<br>({champ['normal_games']}경기)"],
-                            textposition="outside",
-                        )
-                        delta_sign = "+" if delta > 0 else ""
-                        fig.update_layout(
-                            title=f"게임 승률 비교 | 차이: {delta_sign}{delta:.1%}",
-                            yaxis=dict(range=[0, 110], ticksuffix="%"),
-                            height=260,
-                            margin=dict(t=40, b=20, l=20, r=20),
-                            showlegend=False,
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        st.caption("게임 승률 비교 데이터 부족")
-
-                    # 시리즈 단위 지표
-                    swr_snipe = champ["snipe_series_wr"]
-                    swr_normal = champ["normal_series_wr"]
-                    s_delta = champ["series_wr_delta"]
-                    sc1, sc2, sc3 = st.columns(3)
-                    sc1.metric(
-                        "저격 시리즈 승률",
-                        f"{swr_snipe:.1%}" if swr_snipe is not None else "N/A",
-                        f"{champ['snipe_series']}시리즈",
-                    )
-                    sc2.metric(
-                        "비저격 시리즈 승률",
-                        f"{swr_normal:.1%}" if swr_normal is not None else "N/A",
-                        f"{champ['total_series'] - champ['snipe_series']}시리즈",
-                    )
-                    sc3.metric(
-                        "시리즈 WR 차이",
-                        f"+{s_delta:.1%}" if s_delta and s_delta > 0
-                        else (f"{s_delta:.1%}" if s_delta is not None else "N/A"),
-                        "양수 = 밴이 효과적",
-                        delta_color="normal" if s_delta and s_delta > 0 else "inverse",
-                    )
-
+                _render_champ(champ)
             st.divider()
 
     with st.spinner("분석 중..."):
