@@ -397,6 +397,60 @@ def insert_player_team_history(conn, df, team_map):
     print(f"  player_team_history: {count}개")
 
 
+def _delete_season_data(conn, year: int):
+    """해당 연도 경기 데이터 삭제 — ETL 재실행 전 중복 방지"""
+    season_like = f"LCK_{year}_%"
+
+    # 외래 키 의존성 순서대로 삭제
+    r = conn.execute(text("""
+        DELETE FROM picks_bans
+        WHERE game_id IN (
+            SELECT g.game_id FROM games g
+            JOIN series s ON s.series_id = g.series_id
+            WHERE s.season_id LIKE :sl
+        )
+    """), {"sl": season_like})
+    print(f"  picks_bans 삭제: {r.rowcount}행")
+
+    r = conn.execute(text("""
+        DELETE FROM game_participants
+        WHERE game_id IN (
+            SELECT g.game_id FROM games g
+            JOIN series s ON s.series_id = g.series_id
+            WHERE s.season_id LIKE :sl
+        )
+    """), {"sl": season_like})
+    print(f"  game_participants 삭제: {r.rowcount}행")
+
+    r = conn.execute(text("""
+        DELETE FROM game_teams
+        WHERE game_id IN (
+            SELECT g.game_id FROM games g
+            JOIN series s ON s.series_id = g.series_id
+            WHERE s.season_id LIKE :sl
+        )
+    """), {"sl": season_like})
+    print(f"  game_teams 삭제: {r.rowcount}행")
+
+    r = conn.execute(text("""
+        DELETE FROM games
+        WHERE series_id IN (
+            SELECT series_id FROM series WHERE season_id LIKE :sl
+        )
+    """), {"sl": season_like})
+    print(f"  games 삭제: {r.rowcount}행")
+
+    r = conn.execute(text(
+        "DELETE FROM series WHERE season_id LIKE :sl"
+    ), {"sl": season_like})
+    print(f"  series 삭제: {r.rowcount}행")
+
+    r = conn.execute(text(
+        "DELETE FROM player_team_history WHERE season_id LIKE :sl"
+    ), {"sl": season_like})
+    print(f"  player_team_history 삭제: {r.rowcount}행")
+
+
 def run_etl(year: int):
     csv_path = _csv_path(year)
     if not csv_path.exists():
@@ -413,6 +467,10 @@ def run_etl(year: int):
 
     engine = get_engine()
     with engine.begin() as conn:
+        print("\n[1/2] 기존 데이터 삭제")
+        _delete_season_data(conn, year)
+
+        print("\n[2/2] 새 데이터 삽입")
         insert_seasons(conn, df)
         insert_patches(conn, df)
         insert_champions(conn, df)
