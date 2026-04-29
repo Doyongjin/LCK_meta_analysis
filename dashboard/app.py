@@ -1453,18 +1453,104 @@ def show_scenario_i(_fn, teams, season_id=None):
                 _render_champ(champ)
             st.divider()
 
+    def _render_compare(r1, r2, name1, name2):
+        """두 팀을 포지션 단위로 행 분할해서 정렬 유지"""
+        import pandas as pd
+
+        # 요약 테이블 — 좌우 나란히
+        st.subheader("요약 — 밴 효과 순위")
+        st.caption("게임 WR 차이 기준 내림차순 (양수 = 밴이 효과적)")
+        ca, cb = st.columns(2)
+
+        def _summary_df(result):
+            summary = result.get("summary", [])
+            if not summary:
+                return None
+            df = pd.DataFrame(summary)
+            df["게임 WR 차이"] = df["game_wr_delta"].apply(
+                lambda x: f"+{x:.1%}" if x > 0 else f"{x:.1%}"
+            )
+            df["시리즈 WR 차이"] = df["series_wr_delta"].apply(
+                lambda x: f"+{x:.1%}" if x is not None and x > 0
+                else (f"{x:.1%}" if x is not None else "N/A")
+            )
+            df["샘플"] = df["low_sample"].apply(lambda x: "⚠️" if x else "")
+            return df[["player", "champion", "banned_games", "snipe_series",
+                        "게임 WR 차이", "시리즈 WR 차이", "샘플"]].rename(columns={
+                "player": "선수", "champion": "챔피언",
+                "banned_games": "밴된 게임", "snipe_series": "저격 시리즈",
+            })
+
+        with ca:
+            st.caption(name1)
+            df1 = _summary_df(r1)
+            if df1 is not None:
+                st.dataframe(df1, hide_index=True)
+            else:
+                st.caption("데이터 없음")
+        with cb:
+            st.caption(name2)
+            df2 = _summary_df(r2)
+            if df2 is not None:
+                st.dataframe(df2, hide_index=True)
+            else:
+                st.caption("데이터 없음")
+
+        st.divider()
+
+        # 포지션별로 행 단위 렌더링 — 같은 포지션이 항상 같은 높이에서 시작
+        pos_order_map = {p: i for i, p in enumerate(_POS_ORDER_I)}
+        players1 = sorted(r1["players"], key=lambda x: pos_order_map.get(x["position"], 99))
+        players2 = sorted(r2["players"], key=lambda x: pos_order_map.get(x["position"], 99))
+        p1_map = {p["position"]: p for p in players1}
+        p2_map = {p["position"]: p for p in players2}
+
+        all_positions = sorted(
+            set(p1_map) | set(p2_map),
+            key=lambda x: pos_order_map.get(x, 99)
+        )
+
+        for pos in all_positions:
+            pos_label = _POS_LABEL_I.get(pos, pos)
+            pd1 = p1_map.get(pos)
+            pd2 = p2_map.get(pos)
+
+            # 포지션 행 헤더
+            hc1, hc2 = st.columns(2)
+            with hc1:
+                name_str = f" · {pd1['player']}" if pd1 else ""
+                st.markdown(f"### {pos_label}{name_str}")
+            with hc2:
+                name_str = f" · {pd2['player']}" if pd2 else ""
+                st.markdown(f"### {pos_label}{name_str}")
+
+            # 챔피언별 — 같은 인덱스끼리 같은 행에
+            champs1 = pd1["champions"] if pd1 else []
+            champs2 = pd2["champions"] if pd2 else []
+            max_champs = max(len(champs1), len(champs2))
+
+            for i in range(max_champs):
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    if i < len(champs1):
+                        _render_champ(champs1[i])
+                with cc2:
+                    if i < len(champs2):
+                        _render_champ(champs2[i])
+
+            st.divider()
+
     with st.spinner("분석 중..."):
         r1 = _cached_snipe_effectiveness(team, season_id)
         r2 = _cached_snipe_effectiveness(compare_team, season_id) if compare_team else None
 
     if r2:
-        col_a, col_b = st.columns(2)
-        with col_a:
-            st.subheader(team)
-            _render_team(r1)
-        with col_b:
-            st.subheader(compare_team)
-            _render_team(r2)
+        if "error" in r1:
+            st.error(r1["error"])
+        elif "error" in r2:
+            st.error(r2["error"])
+        else:
+            _render_compare(r1, r2, team, compare_team)
     else:
         _render_team(r1)
 
