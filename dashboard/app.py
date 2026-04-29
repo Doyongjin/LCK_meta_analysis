@@ -919,22 +919,22 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
 # H. 스페셜리스트 챔피언
 # ─────────────────────────────────────────────
 def _show_scenario_h_team(roster_fn, specialist_fn, teams, season_id):
-    """팀 비교 모드 — 포지션별 섹션으로 두 팀 나란히 표시"""
+    """팀 비교 모드 — 팀/포지션/선수 드롭다운 → 산포도 오버레이 + 표"""
     import pandas as pd
+    import plotly.graph_objects as go
 
-    POS_LABEL = {"top": "TOP", "jng": "JNG", "mid": "MID", "bot": "BOT", "sup": "SUP"}
     POS_ORDER = ["top", "jng", "mid", "bot", "sup"]
+    POS_LABEL = {"top": "TOP", "jng": "JNG", "mid": "MID", "bot": "BOT", "sup": "SUP"}
 
+    # ── 1단계: 팀 선택 ──────────────────────────────
     col1, col2 = st.columns(2)
     with col1:
         team_a = st.selectbox("팀 A", teams, key="h_team_a")
     with col2:
         team_b = st.selectbox("팀 B", [t for t in teams if t != team_a], key="h_team_b")
 
-    if not st.button("팀 비교 분석", key="h_team_run"):
-        return
-
-    with st.spinner("로스터 및 챔피언 데이터 로딩 중..."):
+    # ── 2단계: 로스터 로딩 ──────────────────────────
+    with st.spinner("로스터 로딩 중..."):
         roster_a = roster_fn(team_a, season_id=season_id)
         roster_b = roster_fn(team_b, season_id=season_id)
 
@@ -943,70 +943,140 @@ def _show_scenario_h_team(roster_fn, specialist_fn, teams, season_id):
     if "error" in roster_b:
         st.error(roster_b["error"]); return
 
-    def _champ_label(r):
-        marks = ""
-        if r.get("is_specialist"): marks += "⭐"
-        if r.get("is_joker_pick"): marks += "🃏"
-        return f"{marks} {r['champion']}".strip() if marks else r["champion"]
+    # ── 3단계: 포지션 선택 ─────────────────────────
+    available_pos = [p for p in POS_ORDER
+                     if roster_a["roster"].get(p) or roster_b["roster"].get(p)]
+    pos = st.selectbox(
+        "포지션",
+        available_pos,
+        format_func=lambda p: POS_LABEL[p],
+        key="h_team_pos",
+    )
 
-    def _render_player(player_name, games, is_callup):
-        tag = f" *(콜업, {games}경기)*" if is_callup else f" *({games}경기)*"
-        st.markdown(f"**{player_name}**{tag}")
-        with st.spinner(f"{player_name} 분석 중..."):
-            result = specialist_fn(player_name, season_id=season_id)
-        if "error" in result:
-            st.caption(f"데이터 없음: {result['error']}")
-            return
-        champs = result.get("all_champions", [])
+    # ── 4단계: 선수 선택 (포지션별 드롭다운) ────────
+    def _player_options(roster):
+        data = roster["roster"].get(pos, {})
+        options = []
+        for p in data.get("starters", []):
+            options.append((p["player"], f"{p['player']} ({p['games']}경기)"))
+        for p in data.get("callups", []):
+            options.append((p["player"], f"{p['player']} ({p['games']}경기, 콜업)"))
+        return options
+
+    opts_a = _player_options(roster_a)
+    opts_b = _player_options(roster_b)
+
+    col3, col4 = st.columns(2)
+    with col3:
+        st.caption(f"**{team_a}**")
+        if opts_a:
+            sel_a = st.selectbox(
+                "선수 A", [o[0] for o in opts_a],
+                format_func=lambda v: next(label for name, label in opts_a if name == v),
+                key="h_player_a",
+            )
+        else:
+            st.caption("해당 포지션 데이터 없음")
+            sel_a = None
+
+    with col4:
+        st.caption(f"**{team_b}**")
+        if opts_b:
+            sel_b = st.selectbox(
+                "선수 B", [o[0] for o in opts_b],
+                format_func=lambda v: next(label for name, label in opts_b if name == v),
+                key="h_player_b",
+            )
+        else:
+            st.caption("해당 포지션 데이터 없음")
+            sel_b = None
+
+    if not sel_a or not sel_b:
+        return
+    if not st.button("분석", key="h_team_run"):
+        return
+
+    # ── 5단계: 데이터 로딩 ─────────────────────────
+    with st.spinner("챔피언 데이터 분석 중..."):
+        r_a = specialist_fn(sel_a, season_id=season_id)
+        r_b = specialist_fn(sel_b, season_id=season_id)
+
+    if "error" in r_a:
+        st.error(r_a["error"]); return
+    if "error" in r_b:
+        st.error(r_b["error"]); return
+
+    champs_a = r_a.get("all_champions", [])
+    champs_b = r_b.get("all_champions", [])
+
+    if not champs_a and not champs_b:
+        st.info("챔피언 데이터 없음")
+        return
+
+    # ── 6단계: 산포도 ──────────────────────────────
+    color_a, color_b = "#2196F3", "#FF9800"
+
+    fig = go.Figure()
+
+    for champs, name, color in [(champs_a, sel_a, color_a), (champs_b, sel_b, color_b)]:
         if not champs:
-            st.caption("챔피언 데이터 없음")
+            continue
+        df = pd.DataFrame(champs)
+        for is_spec, suffix, filled in [(True, "스페셜리스트", True), (False, "일반", False)]:
+            sub = df[df["is_specialist"] == is_spec]
+            if sub.empty:
+                continue
+            fig.add_trace(go.Scatter(
+                x=sub["excess_wr"],
+                y=sub["gold15_advantage"],
+                mode="markers+text",
+                text=sub["champion"],
+                textposition="top center",
+                name=f"{name} ({suffix})",
+                marker=dict(
+                    size=sub["games"] * 4,
+                    sizemode="diameter",
+                    sizemin=8,
+                    color=color if filled else "rgba(0,0,0,0)",
+                    line=dict(width=2, color=color),
+                ),
+            ))
+
+    fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.4)
+    fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.4)
+    fig.update_layout(
+        title=f"{sel_a} ({team_a}) vs {sel_b} ({team_b}) — 챔피언 비교",
+        xaxis_title="초과 승률 (LCK 평균 대비)",
+        yaxis_title="15분 골드 우위 (골드)",
+        height=500,
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+    # ── 7단계: 표 ──────────────────────────────────
+    def _make_table(champs, name):
+        if not champs:
+            st.caption("데이터 없음")
             return
         df = pd.DataFrame(champs)
-        df["챔피언"] = df.apply(_champ_label, axis=1)
+        def _label(r):
+            marks = ("⭐" if r["is_specialist"] else "") + ("🃏" if r.get("is_joker_pick") else "")
+            return f"{marks} {r['champion']}".strip() if marks else r["champion"]
+        df["챔피언"] = df.apply(_label, axis=1)
         df["LCK 점유율"] = df["joker_share"].apply(lambda x: f"{x:.0%}")
         df["강제픽"] = df["likely_forced_pick"].apply(lambda x: "⚠️" if x else "")
-        display = df[["챔피언", "games", "LCK 점유율", "player_wr", "excess_wr",
-                       "gold15_advantage", "specialist_score", "강제픽"]].copy()
-        display.columns = ["챔피언", "경기수", "LCK점유율", "WR", "초과WR",
-                            "골드우위", "점수", "강제픽"]
-        st.dataframe(display, hide_index=True, use_container_width=True)
+        disp = df[["챔피언", "games", "LCK 점유율", "player_wr", "excess_wr",
+                    "gold15_advantage", "specialist_score", "강제픽"]].copy()
+        disp.columns = ["챔피언", "경기수", "LCK점유율", "WR", "초과WR", "골드우위", "점수", "강제픽"]
+        st.subheader(name)
+        st.dataframe(disp, hide_index=True, use_container_width=True)
 
-    for pos in POS_ORDER:
-        label = POS_LABEL[pos]
-        data_a = roster_a["roster"].get(pos)
-        data_b = roster_b["roster"].get(pos)
+    col5, col6 = st.columns(2)
+    with col5:
+        _make_table(champs_a, f"{sel_a} ({team_a})")
+    with col6:
+        _make_table(champs_b, f"{sel_b} ({team_b})")
 
-        if not data_a and not data_b:
-            continue
-
-        st.markdown(f"### {label}")
-        col_a, col_b = st.columns(2)
-
-        with col_a:
-            st.caption(team_a)
-            if data_a:
-                for p in data_a["starters"]:
-                    _render_player(p["player"], p["games"], is_callup=False)
-                for p in data_a["callups"]:
-                    st.markdown("---")
-                    _render_player(p["player"], p["games"], is_callup=True)
-            else:
-                st.caption("데이터 없음")
-
-        with col_b:
-            st.caption(team_b)
-            if data_b:
-                for p in data_b["starters"]:
-                    _render_player(p["player"], p["games"], is_callup=False)
-                for p in data_b["callups"]:
-                    st.markdown("---")
-                    _render_player(p["player"], p["games"], is_callup=True)
-            else:
-                st.caption("데이터 없음")
-
-        st.divider()
-
-    st.caption("⭐ = 스페셜리스트 / 🃏 = 조커 픽 / ⚠️ = 피어리스 강제픽 의심")
+    st.caption("⭐ = 스페셜리스트 / 🃏 = 조커 픽 / ⚠️ = 피어리스 강제픽 의심 / 채움 = 스페셜리스트, 테두리 = 일반")
 
 
 def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=None, teams=None):
