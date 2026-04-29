@@ -947,6 +947,62 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
             row[1].write(_fmt(k1, r1.get(k1, "-")))
             row[2].write(_fmt(k2, r2.get(k2, "-")))
 
+        # Role Priority
+        st.divider()
+        st.subheader("포지션별 픽 우선순위")
+        st.caption("평균 픽 순서 (1 = 가장 먼저, 5 = 가장 나중) — 낮을수록 해당 포지션을 드래프트 축으로 삼는 경향")
+
+        from analysis.scenario_g import get_role_priority
+        rp1 = get_role_priority(team1, season_id)
+        rp2 = get_role_priority(team2, season_id)
+
+        POS_KR = {"top": "탑", "jng": "정글", "mid": "미드", "bot": "원딜", "sup": "서폿"}
+        POS_ORDER_G = ["top", "jng", "mid", "bot", "sup"]
+
+        if "error" not in rp1 and "error" not in rp2:
+            # 막대 차트 — 두 팀 나란히
+            rp_data = []
+            for pos in POS_ORDER_G:
+                v1 = rp1["roles"][pos]["avg_pick_order"]
+                v2 = rp2["roles"][pos]["avg_pick_order"]
+                if v1 is not None:
+                    rp_data.append({"포지션": POS_KR[pos], "평균 픽 순서": v1, "팀": team1})
+                if v2 is not None:
+                    rp_data.append({"포지션": POS_KR[pos], "평균 픽 순서": v2, "팀": team2})
+
+            if rp_data:
+                fig_rp = px.bar(
+                    pd.DataFrame(rp_data),
+                    x="포지션", y="평균 픽 순서", color="팀",
+                    barmode="group",
+                    color_discrete_map={team1: "#2196F3", team2: "#FF9800"},
+                    category_orders={"포지션": [POS_KR[p] for p in POS_ORDER_G]},
+                    text="평균 픽 순서",
+                )
+                fig_rp.update_traces(texttemplate="%{text:.1f}", textposition="outside")
+                fig_rp.update_layout(
+                    yaxis=dict(range=[0, 6], title="평균 픽 순서"),
+                    height=320,
+                    margin=dict(t=20, b=20),
+                )
+                st.plotly_chart(fig_rp, use_container_width=True, key="g_rp_bar")
+
+            # 픽 순서 분포 테이블 — 팀1 / 팀2 나란히
+            tc1, tc2 = st.columns(2)
+            for col, rp, tname in [(tc1, rp1, team1), (tc2, rp2, team2)]:
+                with col:
+                    st.caption(tname)
+                    tbl = {"포지션": [], "평균": [], "1픽": [], "2픽": [], "3픽": [], "4픽": [], "5픽": []}
+                    for pos in POS_ORDER_G:
+                        d = rp["roles"][pos]
+                        tbl["포지션"].append(POS_KR[pos])
+                        tbl["평균"].append(f"{d['avg_pick_order']:.1f}" if d["avg_pick_order"] else "-")
+                        for i in range(1, 6):
+                            cnt = d["pick_counts"].get(i, 0)
+                            pct = cnt / d["total"] if d["total"] > 0 else 0
+                            tbl[f"{i}픽"].append(f"{pct:.0%}" if cnt > 0 else "-")
+                    st.dataframe(pd.DataFrame(tbl), hide_index=True)
+
         # 선수 밴 내성 비교
         st.divider()
         st.subheader("선수별 밴 내성 비교")

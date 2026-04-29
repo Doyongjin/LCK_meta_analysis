@@ -148,6 +148,77 @@ def get_team_profile(team_name: str, season_id: str | None = None) -> dict:
     }
 
 
+def get_role_priority(team_name: str, season_id: str | None = None) -> dict:
+    """
+    팀의 포지션별 평균 픽 순서 (1=가장 먼저, 5=가장 나중)
+    반환:
+    {
+      "team": str,
+      "roles": {
+        "top": {"avg_pick_order": float, "pick_counts": {1:int, 2:int, ...}},
+        "jng": {...}, "mid": {...}, "bot": {...}, "sup": {...}
+      }
+    }
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        team = conn.execute(
+            text("SELECT team_id FROM teams WHERE name = :n OR acronym = :n"),
+            {"n": team_name}
+        ).fetchone()
+        if not team:
+            return {"error": f"팀 없음: {team_name}"}
+        tid = team[0]
+
+        s_filter = ""
+        params: dict = {"tid": tid}
+        if season_id:
+            s_filter = """AND pb.game_id IN (
+                SELECT g.game_id FROM games g
+                JOIN series s ON s.series_id = g.series_id
+                WHERE s.season_id = :sid
+            )"""
+            params["sid"] = season_id
+
+        rows = conn.execute(text(f"""
+            SELECT gp.position, pb.team_pick_order, COUNT(*) AS cnt
+            FROM picks_bans pb
+            JOIN game_participants gp
+              ON gp.game_id = pb.game_id
+             AND gp.team_id = pb.team_id
+             AND gp.champion_id = pb.champion_id
+            WHERE pb.phase = 'pick'
+              AND pb.team_id = :tid
+              AND pb.team_pick_order IS NOT NULL
+              AND gp.position IS NOT NULL
+              {s_filter}
+            GROUP BY gp.position, pb.team_pick_order
+            ORDER BY gp.position, pb.team_pick_order
+        """), params).fetchall()
+
+    POS_ORDER = ["top", "jng", "mid", "bot", "sup"]
+    roles: dict = {p: {"pick_counts": {}, "total": 0, "weighted_sum": 0} for p in POS_ORDER}
+
+    for pos, order, cnt in rows:
+        if pos not in roles:
+            continue
+        roles[pos]["pick_counts"][int(order)] = int(cnt)
+        roles[pos]["total"] += int(cnt)
+        roles[pos]["weighted_sum"] += int(order) * int(cnt)
+
+    result_roles = {}
+    for pos in POS_ORDER:
+        d = roles[pos]
+        avg = round(d["weighted_sum"] / d["total"], 2) if d["total"] > 0 else None
+        result_roles[pos] = {
+            "avg_pick_order": avg,
+            "pick_counts": d["pick_counts"],
+            "total": d["total"],
+        }
+
+    return {"team": team_name, "roles": result_roles}
+
+
 def get_all_team_profiles(season_id: str | None = None) -> list:
     """LCK 전 팀 프로파일 목록 — 해당 시즌에 실제 경기가 있는 팀만"""
     engine = get_engine()
