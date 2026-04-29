@@ -154,6 +154,7 @@ def get_snipe_effectiveness(team_name: str,
                     SELECT gt.game_id, gt.result::int AS win
                     FROM game_teams gt
                     JOIN games g ON g.game_id = gt.game_id
+                    JOIN series ser ON ser.series_id = g.series_id
                     WHERE gt.team_id = :tid
                       {s_filter_game}
                       AND EXISTS (
@@ -163,14 +164,28 @@ def get_snipe_effectiveness(team_name: str,
                             AND pb.phase = 'ban'
                             AND pb.team_id != :tid
                       )
+                      AND NOT (
+                          ser.draft_type = 'fearless'
+                          AND EXISTS (
+                              SELECT 1 FROM picks_bans pb2
+                              JOIN games g2 ON g2.game_id = pb2.game_id
+                              WHERE g2.series_id = g.series_id
+                                AND g2.game_number < g.game_number
+                                AND pb2.champion_id = :cid
+                                AND pb2.phase = 'pick'
+                                AND pb2.team_id = :tid
+                          )
+                      )
                 """), {**params_base, "cid": cid}).fetchall()
 
                 # 해당 챔피언이 밴되지 않은 경기 전체 팀 승률
-                # (픽 여부 무관 — "밴 안 됐을 때 팀이 어땠나"가 핵심)
+                # 피어리스 보정: 같은 시리즈 앞 경기에서 이미 픽한 경기도 제외
+                # ("쓸 수 있었던 경기"만 기준선으로 사용)
                 normal_game_rows = conn.execute(text(f"""
                     SELECT gt.game_id, gt.result::int AS win
                     FROM game_teams gt
                     JOIN games g ON g.game_id = gt.game_id
+                    JOIN series ser ON ser.series_id = g.series_id
                     WHERE gt.team_id = :tid
                       {s_filter_game}
                       AND NOT EXISTS (
@@ -179,6 +194,18 @@ def get_snipe_effectiveness(team_name: str,
                             AND pb.champion_id = :cid
                             AND pb.phase = 'ban'
                             AND pb.team_id != :tid
+                      )
+                      AND NOT (
+                          ser.draft_type = 'fearless'
+                          AND EXISTS (
+                              SELECT 1 FROM picks_bans pb2
+                              JOIN games g2 ON g2.game_id = pb2.game_id
+                              WHERE g2.series_id = g.series_id
+                                AND g2.game_number < g.game_number
+                                AND pb2.champion_id = :cid
+                                AND pb2.phase = 'pick'
+                                AND pb2.team_id = :tid
+                          )
                       )
                 """), {**params_base, "cid": cid}).fetchall()
 
