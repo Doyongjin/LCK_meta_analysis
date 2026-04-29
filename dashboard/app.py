@@ -1343,7 +1343,7 @@ def show_scenario_i(_fn, teams, season_id=None):
     _POS_ORDER_I = ["top", "jng", "mid", "bot", "sup"]
     _POS_LABEL_I = {"top": "탑", "jng": "정글", "mid": "미드", "bot": "원딜", "sup": "서폿"}
 
-    def _render_champ(champ):
+    def _render_champ(champ, key_prefix=""):
         import plotly.graph_objects as go
         c_icon, c_info = st.columns([1, 5])
         with c_icon:
@@ -1376,7 +1376,8 @@ def show_scenario_i(_fn, teams, season_id=None):
                     margin=dict(t=40, b=10, l=20, r=20),
                     showlegend=False,
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, use_container_width=True,
+                                key=f"i_chart_{key_prefix}_{champ['champion']}")
             else:
                 st.caption("게임 승률 비교 데이터 부족")
 
@@ -1449,8 +1450,8 @@ def show_scenario_i(_fn, teams, season_id=None):
                 st.caption("데이터 없음")
                 st.divider()
                 continue
-            for champ in champs:
-                _render_champ(champ)
+            for idx, champ in enumerate(champs):
+                _render_champ(champ, key_prefix=f"single_{pos}_{idx}")
             st.divider()
 
     def _render_compare(r1, r2, name1, name2):
@@ -1533,10 +1534,10 @@ def show_scenario_i(_fn, teams, season_id=None):
                 cc1, cc2 = st.columns(2)
                 with cc1:
                     if i < len(champs1):
-                        _render_champ(champs1[i])
+                        _render_champ(champs1[i], key_prefix=f"cmp1_{pos}_{i}")
                 with cc2:
                     if i < len(champs2):
-                        _render_champ(champs2[i])
+                        _render_champ(champs2[i], key_prefix=f"cmp2_{pos}_{i}")
 
             st.divider()
 
