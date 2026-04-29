@@ -9,7 +9,13 @@ LCK 동일 라인 평균 대비 이 선수가 유독 잘하는 챔피언 식별
 from sqlalchemy import text
 from .db import get_engine
 
-MIN_GAMES = 3
+MIN_GAMES = 1                    # 표시 최소 경기수 (1경기부터 표 노출)
+SPECIALIST_MIN_GAMES = 3         # 스페셜리스트 판정에 필요한 최소 표본
+JOKER_MIN_GAMES = 1          # 조커 픽 본인 최소 경기 (1경기면 승률 100% 필수)
+JOKER_MIN_LCK_GAMES = 1      # LCK 그 라인 총 사용량 최소
+JOKER_MIN_SHARE = 0.70       # 본인 점유율 최소
+JOKER_MIN_WR_MULTI = 0.50    # 2경기+ 본인 승률 최소
+JOKER_MIN_WR_SOLO = 1.00     # 1경기일 때 본인 승률 최소 (= 100%)
 
 
 def get_specialist_champions(player_name: str,
@@ -77,7 +83,8 @@ def get_specialist_champions(player_name: str,
                 gp.champion_id,
                 AVG(gt.result::int) AS lck_wr,
                 AVG(gp.gold_at_15) AS lck_gold15,
-                STDDEV(gp.gold_at_15) AS lck_gold15_stddev
+                STDDEV(gp.gold_at_15) AS lck_gold15_stddev,
+                COUNT(*) AS lck_total_games
             FROM game_participants gp
             JOIN game_teams gt ON gt.game_id = gp.game_id AND gt.team_id = gp.team_id
             WHERE gp.position = :pos
@@ -91,14 +98,15 @@ def get_specialist_champions(player_name: str,
             "wr": float(r[1] or 0.5),
             "gold15": float(r[2] or 0),
             "gold15_stddev": float(r[3] or 0),
+            "total_games": int(r[4] or 0),
         }
         for r in lck_avg
     }
 
-    specialists = []
+    all_champions = []
     for row in player_stats:
         cid, icon, games, p_wr, p_g15, p_g15_std, fearless_late = row
-        lck = lck_map.get(cid, {"wr": 0.5, "gold15": 0.0, "gold15_stddev": 0.0})
+        lck = lck_map.get(cid, {"wr": 0.5, "gold15": 0.0, "gold15_stddev": 0.0, "total_games": 0})
 
         excess_wr = float(p_wr or 0) - lck["wr"]
         g15_adv   = float(p_g15 or 0) - lck["gold15"]
@@ -106,37 +114,56 @@ def get_specialist_champions(player_name: str,
 
         score = (excess_wr * 50) + (g15_adv / 200 * 30) + (stab_adv / 100 * 20)
 
-        # 피어리스 후반 픽 비율 (강제 픽 가능성 지표)
         fl_late = int(fearless_late or 0)
         forced_ratio = round(fl_late / games, 3) if games > 0 else 0.0
-        # 후반 픽이 50% 이상이면 강제 픽 의심
         likely_forced = forced_ratio >= 0.5
+        is_specialist = (
+            games >= SPECIALIST_MIN_GAMES
+            and (excess_wr > 0 or g15_adv > 0 or stab_adv > 0)
+        )
 
-        if excess_wr > 0 or g15_adv > 0 or stab_adv > 0:
-            specialists.append({
-                "champion": cid,
-                "icon_url": icon,
-                "games": int(games),
-                "player_wr": round(float(p_wr or 0), 3),
-                "lck_avg_wr": round(lck["wr"], 3),
-                "excess_wr": round(excess_wr, 3),
-                "player_gold15": round(float(p_g15 or 0), 1),
-                "lck_avg_gold15": round(lck["gold15"], 1),
-                "gold15_advantage": round(g15_adv, 1),
-                "player_gold15_stddev": round(float(p_g15_std or 0), 1),
-                "lck_avg_gold15_stddev": round(lck["gold15_stddev"], 1),
-                "gold15_stability_advantage": round(stab_adv, 1),
-                "specialist_score": round(float(score), 2),
-                # 피어리스 보정 정보
-                "fearless_late_games": fl_late,
-                "forced_pick_ratio": forced_ratio,
-                "likely_forced_pick": likely_forced,
-            })
+        # 조커 픽 판정: 본인이 LCK 같은 라인에서 그 챔피언을 거의 독점 사용
+        # 1경기면 승률 100% 필수, 2경기 이상이면 승률 50%+ 필요
+        lck_total = lck["total_games"]
+        joker_share = round(games / lck_total, 3) if lck_total > 0 else 0.0
+        wr_threshold = JOKER_MIN_WR_SOLO if games == 1 else JOKER_MIN_WR_MULTI
+        is_joker_pick = (
+            games >= JOKER_MIN_GAMES
+            and lck_total >= JOKER_MIN_LCK_GAMES
+            and joker_share >= JOKER_MIN_SHARE
+            and float(p_wr or 0) >= wr_threshold
+        )
 
-    specialists.sort(key=lambda x: x["specialist_score"], reverse=True)
+        all_champions.append({
+            "champion": cid,
+            "icon_url": icon,
+            "games": int(games),
+            "player_wr": round(float(p_wr or 0), 3),
+            "lck_avg_wr": round(lck["wr"], 3),
+            "excess_wr": round(excess_wr, 3),
+            "player_gold15": round(float(p_g15 or 0), 1),
+            "lck_avg_gold15": round(lck["gold15"], 1),
+            "gold15_advantage": round(g15_adv, 1),
+            "player_gold15_stddev": round(float(p_g15_std or 0), 1),
+            "lck_avg_gold15_stddev": round(lck["gold15_stddev"], 1),
+            "gold15_stability_advantage": round(stab_adv, 1),
+            "specialist_score": round(float(score), 2),
+            "is_specialist": is_specialist,
+            "fearless_late_games": fl_late,
+            "forced_pick_ratio": forced_ratio,
+            "likely_forced_pick": likely_forced,
+            # 조커 픽
+            "lck_total_games": lck_total,
+            "joker_share": joker_share,
+            "is_joker_pick": is_joker_pick,
+        })
+
+    all_champions.sort(key=lambda x: x["specialist_score"], reverse=True)
+    specialists = [c for c in all_champions if c["is_specialist"]]
 
     return {
         "player": player_name,
         "position": position,
         "specialists": specialists,
+        "all_champions": all_champions,
     }
