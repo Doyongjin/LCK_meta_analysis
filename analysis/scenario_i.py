@@ -5,7 +5,7 @@
 분석 단위:
   - 챔피언 단위: 특정 챔피언이 밴된 경기/시리즈 승률 vs 밴 안 된 경기/시리즈 승률
   - 시리즈 단위: 저격 밴 1회 이상 / 0회 시리즈 승률 비교
-
+1
 반환 지표:
   - 밴 시 팀 게임 승률, 밴 안 됐을 때 팀 게임 승률, 승률 차이
   - 시리즈 단위 동일 지표
@@ -147,7 +147,8 @@ def get_snipe_effectiveness(team_name: str,
             champ_results = []
             for cid, icon, total_games in top_champs:
                 # ── 게임 단위 ──────────────────────────────────────
-                # 상대팀이 early ban한 경기 목록
+                # global_order는 팀별 내부 순서(1~5). 1페이즈 밴 = global_order <= 3
+                # 상대팀이 1페이즈에 밴한 경기 → 팀 승률
                 banned_game_rows = conn.execute(text(f"""
                     SELECT gt.game_id, gt.result::int AS win
                     FROM game_teams gt
@@ -160,20 +161,26 @@ def get_snipe_effectiveness(team_name: str,
                             AND pb.champion_id = :cid
                             AND pb.phase = 'ban'
                             AND pb.team_id != :tid
-                            AND pb.global_order <= 6
+                            AND pb.global_order <= 3
                       )
                 """), {**params_base, "cid": cid}).fetchall()
 
-                # 밴 안 된 경기 (선수가 실제로 해당 챔피언을 픽한 경기만)
+                # 해당 챔피언이 밴되지 않은 경기 전체 팀 승률
+                # (픽 여부 무관 — "밴 안 됐을 때 팀이 어땠나"가 핵심)
                 normal_game_rows = conn.execute(text(f"""
                     SELECT gt.game_id, gt.result::int AS win
                     FROM game_teams gt
-                    JOIN game_participants gp
-                      ON gp.game_id = gt.game_id AND gp.player_id = :pid
+                    JOIN games g ON g.game_id = gt.game_id
                     WHERE gt.team_id = :tid
-                      AND gp.champion_id = :cid
                       {s_filter_game}
-                """), {**params_base, "pid": pid, "cid": cid}).fetchall()
+                      AND NOT EXISTS (
+                          SELECT 1 FROM picks_bans pb
+                          WHERE pb.game_id = gt.game_id
+                            AND pb.champion_id = :cid
+                            AND pb.phase = 'ban'
+                            AND pb.team_id != :tid
+                      )
+                """), {**params_base, "cid": cid}).fetchall()
 
                 banned_games = len(banned_game_rows)
                 banned_game_wr = (
@@ -192,7 +199,7 @@ def get_snipe_effectiveness(team_name: str,
                 )
 
                 # ── 시리즈 단위 ────────────────────────────────────
-                # 해당 챔피언이 1회 이상 early ban된 시리즈
+                # 해당 챔피언이 1회 이상 밴(페이즈 무관)된 시리즈
                 snipe_series_rows = conn.execute(text(f"""
                     SELECT DISTINCT g.series_id
                     FROM picks_bans pb
@@ -201,7 +208,6 @@ def get_snipe_effectiveness(team_name: str,
                     WHERE pb.champion_id = :cid
                       AND pb.phase = 'ban'
                       AND pb.team_id != :tid
-                      AND pb.global_order <= 6
                       {s_filter_game}
                 """), {**params_base, "cid": cid}).fetchall()
 
