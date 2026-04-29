@@ -809,8 +809,8 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
         with col1:
             team1 = st.selectbox("팀 1", teams, key="g_t1")
         with col2:
-            team2 = st.selectbox("팀 2", teams, key="g_t2",
-                                 index=min(1, len(teams) - 1))
+            teams2_options = [t for t in teams if t != team1]
+            team2 = st.selectbox("팀 2", teams2_options, key="g_t2")
 
         if not st.button("분석", key="g_run"):
             return
