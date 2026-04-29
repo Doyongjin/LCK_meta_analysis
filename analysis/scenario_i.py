@@ -147,8 +147,9 @@ def get_snipe_effectiveness(team_name: str,
             champ_results = []
             for cid, icon, total_games in top_champs:
                 # ── 게임 단위 ──────────────────────────────────────
-                # global_order는 팀별 내부 순서(1~5). 1페이즈 밴 = global_order <= 3
-                # 상대팀이 1페이즈에 밴한 경기 → 팀 승률
+                # global_order는 전체 공통 순서(1~10, 두 팀 번갈아).
+                # 1페이즈 밴 = order 1~6, 2페이즈 = 7~10
+                # 페이즈 무관 전체 밴으로 집계 (표본 확보 우선)
                 banned_game_rows = conn.execute(text(f"""
                     SELECT gt.game_id, gt.result::int AS win
                     FROM game_teams gt
@@ -161,7 +162,6 @@ def get_snipe_effectiveness(team_name: str,
                             AND pb.champion_id = :cid
                             AND pb.phase = 'ban'
                             AND pb.team_id != :tid
-                            AND pb.global_order <= 3
                       )
                 """), {**params_base, "cid": cid}).fetchall()
 
