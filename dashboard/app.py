@@ -105,6 +105,7 @@ with st.sidebar:
             "F. 밴 내성 지수",
             "G. 팀 색깔 프로파일",
             "H. 스페셜리스트 챔피언",
+            "I. 저격 밴 실효성",
         ],
         label_visibility="collapsed",
     )
@@ -120,6 +121,7 @@ def load_fns():
     from analysis.scenario_f import get_ban_resistance
     from analysis.scenario_g import get_team_profile, get_all_team_profiles
     from analysis.scenario_h import get_specialist_champions, get_team_roster_by_games
+    from analysis.scenario_i import get_snipe_effectiveness
     return {
         "ban_impact": get_ban_impact,
         "side_pref": get_side_champion_preference,
@@ -131,6 +133,7 @@ def load_fns():
         "all_team_profiles": get_all_team_profiles,
         "specialist": get_specialist_champions,
         "team_roster": get_team_roster_by_games,
+        "snipe_effectiveness": get_snipe_effectiveness,
     }
 
 
@@ -1296,6 +1299,167 @@ def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=Non
 
 
 # ─────────────────────────────────────────────
+# I. 저격 밴 실효성
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def _cached_snipe_effectiveness(team_name, season_id):
+    from analysis.scenario_i import get_snipe_effectiveness
+    return get_snipe_effectiveness(team_name, season_id)
+
+
+def show_scenario_i(_fn, teams, season_id=None):
+    st.title("I. 저격 밴 실효성")
+
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+**이 분석이 보여주는 것**: "상대가 우리 선수의 주력 챔피언을 밴했을 때 실제로 우리 팀이 졌는가?"
+
+상관관계(저격 밴이 많다)에서 한 단계 나아가, **밴의 실제 효과**를 게임·시리즈 단위로 측정합니다.
+
+#### 지표 해석
+| 지표 | 의미 |
+|------|------|
+| **게임 승률 차이** | 밴 안 됐을 때 승률 − 밴됐을 때 승률. **양수가 클수록** 그 챔피언 밴이 효과적 |
+| **시리즈 승률 차이** | 저격 밴이 1회 이상 있었던 시리즈 vs 없었던 시리즈의 팀 승률 차이 |
+| **⚠️ 샘플 부족** | 밴된 경기가 10경기 미만 — 방향성만 참고, 수치 신뢰 금지 |
+
+#### 해석 시 주의사항
+- **양수 = 밴이 효과적**: 해당 챔피언이 없을 때 팀 승률이 낮다 → 상대 입장에서 밴할 가치 있음
+- **음수 = 밴이 역효과**: 해당 챔피언이 없어도 팀이 잘 이김 → 해당 챔피언은 저격 가치가 낮음
+- **게임 WR 차이 vs 시리즈 WR 차이**: 게임 단위는 개별 경기 성과, 시리즈 단위는 실제 승강 결과와 직결
+- **Selection bias 주의**: 강팀 상대할 때 밴이 더 집중되는 경향 → 밴됐을 때 승률이 낮은 이유가 상대팀 강도일 수 있음
+""")
+
+    col1, col2 = st.columns(2)
+    with col1:
+        team = st.selectbox("팀 선택", teams, key="i_team")
+    with col2:
+        compare_raw = st.selectbox("비교 팀 (선택)", ["(없음)"] + [t for t in teams if t != team], key="i_compare")
+        compare_team = None if compare_raw == "(없음)" else compare_raw
+
+    if not st.button("분석", key="i_run"):
+        return
+
+    def _render_team(result):
+        if "error" in result:
+            st.error(result["error"])
+            return
+
+        # 요약 테이블 (가장 효과적인 저격 대상 순)
+        summary = result.get("summary", [])
+        if summary:
+            import pandas as pd
+            df_sum = pd.DataFrame(summary)
+            df_sum["게임 WR 차이"] = df_sum["game_wr_delta"].apply(
+                lambda x: f"+{x:.1%}" if x > 0 else f"{x:.1%}"
+            )
+            df_sum["시리즈 WR 차이"] = df_sum["series_wr_delta"].apply(
+                lambda x: f"+{x:.1%}" if x is not None and x > 0
+                else (f"{x:.1%}" if x is not None else "N/A")
+            )
+            df_sum["샘플"] = df_sum["low_sample"].apply(lambda x: "⚠️" if x else "")
+            st.subheader("요약 — 밴 효과 순위")
+            st.caption("게임 WR 차이 기준 내림차순 (양수 = 밴이 효과적)")
+            st.dataframe(
+                df_sum[["player", "champion", "banned_games", "snipe_series",
+                         "게임 WR 차이", "시리즈 WR 차이", "샘플"]].rename(columns={
+                    "player": "선수", "champion": "챔피언",
+                    "banned_games": "밴된 게임", "snipe_series": "저격 시리즈",
+                }),
+                hide_index=True,
+            )
+            st.divider()
+
+        # 선수별 상세
+        for player_data in result["players"]:
+            st.subheader(f"{player_data['player']} ({player_data['position']})")
+            champs = player_data["champions"]
+            if not champs:
+                st.caption("데이터 없음")
+                continue
+
+            for champ in champs:
+                import plotly.graph_objects as go
+
+                c_icon, c_info = st.columns([1, 5])
+                with c_icon:
+                    if champ["icon_url"]:
+                        st.image(champ["icon_url"], width=48)
+                    st.caption(champ["champion"])
+
+                with c_info:
+                    if champ["low_sample"]:
+                        st.warning(f"⚠️ 밴된 경기 {champ['banned_games']}경기 — 샘플 부족, 방향성만 참고")
+
+                    # 게임 단위 바 차트
+                    bwr = champ["banned_game_wr"]
+                    nwr = champ["normal_game_wr"]
+                    delta = champ["game_wr_delta"]
+
+                    if bwr is not None and nwr is not None:
+                        fig = go.Figure()
+                        fig.add_bar(
+                            x=["밴됐을 때", "픽했을 때"],
+                            y=[bwr * 100, nwr * 100],
+                            marker_color=["#EF553B", "#00CC96"],
+                            text=[f"{bwr:.1%}<br>({champ['banned_games']}경기)",
+                                  f"{nwr:.1%}<br>({champ['normal_games']}경기)"],
+                            textposition="outside",
+                        )
+                        delta_sign = "+" if delta > 0 else ""
+                        fig.update_layout(
+                            title=f"게임 승률 비교 | 차이: {delta_sign}{delta:.1%}",
+                            yaxis=dict(range=[0, 110], ticksuffix="%"),
+                            height=260,
+                            margin=dict(t=40, b=20, l=20, r=20),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.caption("게임 승률 비교 데이터 부족")
+
+                    # 시리즈 단위 지표
+                    swr_snipe = champ["snipe_series_wr"]
+                    swr_normal = champ["normal_series_wr"]
+                    s_delta = champ["series_wr_delta"]
+                    sc1, sc2, sc3 = st.columns(3)
+                    sc1.metric(
+                        "저격 시리즈 승률",
+                        f"{swr_snipe:.1%}" if swr_snipe is not None else "N/A",
+                        f"{champ['snipe_series']}시리즈",
+                    )
+                    sc2.metric(
+                        "비저격 시리즈 승률",
+                        f"{swr_normal:.1%}" if swr_normal is not None else "N/A",
+                        f"{champ['total_series'] - champ['snipe_series']}시리즈",
+                    )
+                    sc3.metric(
+                        "시리즈 WR 차이",
+                        f"+{s_delta:.1%}" if s_delta and s_delta > 0
+                        else (f"{s_delta:.1%}" if s_delta is not None else "N/A"),
+                        "양수 = 밴이 효과적",
+                        delta_color="normal" if s_delta and s_delta > 0 else "inverse",
+                    )
+
+            st.divider()
+
+    with st.spinner("분석 중..."):
+        r1 = _cached_snipe_effectiveness(team, season_id)
+        r2 = _cached_snipe_effectiveness(compare_team, season_id) if compare_team else None
+
+    if r2:
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader(team)
+            _render_team(r1)
+        with col_b:
+            st.subheader(compare_team)
+            _render_team(r2)
+    else:
+        _render_team(r1)
+
+
+# ─────────────────────────────────────────────
 # 메인 렌더링
 # ─────────────────────────────────────────────
 try:
@@ -1326,6 +1490,8 @@ try:
         show_scenario_h(fns["specialist"], lists["players"],
                         lists["player_positions"], season_id,
                         roster_fn=fns["team_roster"], teams=lists["teams"])
+    elif page == "I. 저격 밴 실효성":
+        show_scenario_i(fns["snipe_effectiveness"], lists["teams"], season_id)
 
 except Exception as e:
     st.error(f"DB 연결 실패: {e}")
