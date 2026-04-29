@@ -2,6 +2,13 @@
 시나리오 F — 선수별 밴 내성 지수 (라인별 기준 분리)
 챔프폭 + 주력 의존도 + 주력 챔피언 사용 불가 시 승률 하락폭 + Gold@15 변동성을 종합해 0~100 점수 산출
 
+가중치 객관화:
+  - 4개 지표 모두 LCK 실제 분포(percentile) 기반으로 점수화
+  - wr_drop / gold15_volatility 기준값도 DB에서 실제 계산 (하드코딩 제거)
+
+주력 챔피언 확장:
+  - 1개 → top3 챔피언 기준 (하나라도 막혔을 때 평균 영향 측정)
+
 피어리스 보정: "주력 챔피언 사용 불가" 정의를 확장
   - 상대팀 밴 (기존)
   - 같은 시리즈 앞 경기에서 우리 팀이 이미 픽 → 피어리스 규정상 재픽 불가 (추가)
@@ -12,7 +19,7 @@ from .db import get_engine
 
 def _get_player_raw_stats(pid: int, tid: int | None, conn,
                           season_id: str | None = None) -> dict:
-    """선수의 원시 통계 수집 (피어리스 보정 포함)"""
+    """선수의 원시 통계 수집 (피어리스 보정 + top3 주력 챔피언 기준)"""
     params: dict = {"pid": pid}
     team_filter     = "AND gt.team_id = :tid" if tid else ""
     cte_team_filter = "AND gp.team_id = :tid" if tid else ""
@@ -50,20 +57,21 @@ def _get_player_raw_stats(pid: int, tid: int | None, conn,
     top_champ_games = champ_stats[0][1] if champ_stats else 0
 
     primary_dependency = top_champ_games / total_games if total_games > 0 else 0
-    champ_pool_size = len(champ_stats)  # 1경기 이상 모든 챔피언
+    champ_pool_size = len(champ_stats)
 
-    # 주력 챔피언: 2경기 이상 플레이한 챔피언 중 상위
+    # 주력 챔피언: 2경기 이상 상위 3개
     champs_2plus = [r for r in champ_stats if r[1] >= 2]
-    primary_champ = champs_2plus[0][0] if champs_2plus else None
-    wr_drop = 0.0
-    gold15_stddev_normal = 0.0
-    gold15_stddev_banned = 0.0
+    primary_champs = [r[0] for r in champs_2plus[:3]]
+    primary_champ = primary_champs[0] if primary_champs else None
+
+    wr_drops = []
+    gold15_stddev_normals = []
+    gold15_stddev_banneds = []
     banned_count = 0
     prev_used_count = 0
     blocked_count = 0
 
-    if primary_champ:
-        # 1) 상대팀이 주력 챔피언을 밴한 경기 + 2) 피어리스에서 같은 시리즈 앞 경기에 픽한 경기 통합
+    for cid in primary_champs:
         blocked_stats = conn.execute(text(f"""
             WITH player_games AS (
                 SELECT gp.game_id, gp.team_id, g.game_number,
@@ -83,7 +91,6 @@ def _get_player_raw_stats(pid: int, tid: int | None, conn,
                   AND pb.team_id != pg.team_id
             ),
             prev_used_games AS (
-                -- 피어리스 시리즈에서 같은 시리즈 앞 경기에 우리 팀이 이미 해당 챔피언을 픽한 경우
                 SELECT DISTINCT pg.game_id
                 FROM player_games pg
                 WHERE pg.draft_type = 'fearless'
@@ -105,13 +112,13 @@ def _get_player_raw_stats(pid: int, tid: int | None, conn,
             SELECT
                 AVG(gt.result::int)   AS blocked_wr,
                 STDDEV(gt.gold_at_15) AS blocked_gold15_stddev,
-                (SELECT COUNT(*) FROM banned_games)            AS banned_count,
-                (SELECT COUNT(*) FROM prev_used_games)         AS prev_used_count,
-                (SELECT COUNT(DISTINCT game_id) FROM blocked_games) AS blocked_count
+                (SELECT COUNT(*) FROM banned_games)                    AS banned_count,
+                (SELECT COUNT(*) FROM prev_used_games)                 AS prev_used_count,
+                (SELECT COUNT(DISTINCT game_id) FROM blocked_games)    AS blocked_count
             FROM game_teams gt
             JOIN player_games pg ON pg.game_id = gt.game_id AND pg.team_id = gt.team_id
             WHERE gt.game_id IN (SELECT game_id FROM blocked_games)
-        """), {**params, "cid": primary_champ}).fetchone()
+        """), {**params, "cid": cid}).fetchone()
 
         normal_stddev_row = conn.execute(text(f"""
             SELECT STDDEV(gt.gold_at_15)
@@ -121,21 +128,29 @@ def _get_player_raw_stats(pid: int, tid: int | None, conn,
               AND gp.champion_id = :cid
               {team_filter}
               {s_filter}
-        """), {**params, "cid": primary_champ}).scalar()
+        """), {**params, "cid": cid}).scalar()
 
-        normal_wr = float(champ_stats[0][2] or 0)
-        if blocked_stats:
+        normal_wr = float(next(r[2] for r in champ_stats if r[0] == cid) or 0)
+        normal_std = float(normal_stddev_row or 0)
+
+        if blocked_stats and blocked_stats[4] and int(blocked_stats[4]) > 0:
             blocked_wr_val = float(blocked_stats[0]) if blocked_stats[0] is not None else normal_wr
-            wr_drop = max(0.0, normal_wr - blocked_wr_val)
-            gold15_stddev_banned = float(blocked_stats[1] or 0)
-            banned_count   = int(blocked_stats[2] or 0)
-            prev_used_count = int(blocked_stats[3] or 0)
-            blocked_count  = int(blocked_stats[4] or 0)
+            wr_drops.append(max(0.0, normal_wr - blocked_wr_val))
+            blocked_std = float(blocked_stats[1] or normal_std)
+            gold15_stddev_banneds.append(blocked_std)
+            if cid == primary_champ:
+                banned_count    = int(blocked_stats[2] or 0)
+                prev_used_count = int(blocked_stats[3] or 0)
+                blocked_count   = int(blocked_stats[4] or 0)
+        else:
+            wr_drops.append(0.0)
+            gold15_stddev_banneds.append(normal_std)
 
-        gold15_stddev_normal = float(normal_stddev_row or 0)
-        if gold15_stddev_banned == 0:
-            gold15_stddev_banned = gold15_stddev_normal
+        gold15_stddev_normals.append(normal_std)
 
+    wr_drop = sum(wr_drops) / len(wr_drops) if wr_drops else 0.0
+    gold15_stddev_normal = gold15_stddev_normals[0] if gold15_stddev_normals else 0.0
+    gold15_stddev_banned = gold15_stddev_banneds[0] if gold15_stddev_banneds else 0.0
     gold15_volatility_delta = max(0.0, gold15_stddev_banned - gold15_stddev_normal)
 
     return {
@@ -144,6 +159,7 @@ def _get_player_raw_stats(pid: int, tid: int | None, conn,
         "primary_dependency": primary_dependency,
         "wr_drop_when_banned": wr_drop,
         "primary_champ": primary_champ,
+        "primary_champs_top3": primary_champs,
         "gold15_stddev_normal": gold15_stddev_normal,
         "gold15_stddev_banned": gold15_stddev_banned,
         "gold15_volatility_delta": gold15_volatility_delta,
@@ -153,33 +169,8 @@ def _get_player_raw_stats(pid: int, tid: int | None, conn,
     }
 
 
-def _compute_ban_resistance(stats: dict, position_avg: dict) -> float:
-    """
-    밴 내성 점수 0~100 계산
-    - 챔프폭 넓을수록 +          (가중치 0.25)
-    - 주력 의존도 낮을수록 +      (가중치 0.28)
-    - 주력 사용 불가 시 승률 하락폭 낮을수록 + (가중치 0.27)
-    - 주력 사용 불가 시 Gold@15 변동성 낮을수록 + (가중치 0.20)
-    """
-    if not stats:
-        return 50.0
-
-    avg_pool    = position_avg.get("champ_pool_size", 5)
-    avg_dep     = position_avg.get("primary_dependency", 0.35)
-    avg_drop    = position_avg.get("wr_drop_when_banned", 0.1)
-    avg_vdelta  = position_avg.get("gold15_volatility_delta", 300.0)
-
-    pool_score  = min(100, (stats["champ_pool_size"] / max(avg_pool, 1)) * 50)
-    dep_score   = max(0, (1 - stats["primary_dependency"] / max(avg_dep * 2, 0.01)) * 50 + 50)
-    drop_score  = max(0, (1 - stats["wr_drop_when_banned"] / max(avg_drop * 2, 0.01)) * 50 + 50)
-    stab_score  = max(0, (1 - stats["gold15_volatility_delta"] / max(avg_vdelta * 2, 1)) * 50 + 50)
-
-    raw = (pool_score * 0.25 + dep_score * 0.28 + drop_score * 0.27 + stab_score * 0.20)
-    return round(min(100, max(0, raw)), 1)
-
-
 def get_position_averages(position: str, conn, season_id: str | None = None) -> dict:
-    """라인별 LCK 평균 통계 (DB에서 실시간 계산, 시즌 필터 적용)"""
+    """라인별 LCK 평균 + 분포 통계 (DB에서 실제 계산, 하드코딩 없음)"""
     params: dict = {"pos": position}
     s_filter = ""
     if season_id:
@@ -190,8 +181,8 @@ def get_position_averages(position: str, conn, season_id: str | None = None) -> 
         )"""
         params["sid"] = season_id
 
-    # 선수별 챔프풀(1경기+) 및 주력 의존도 계산
-    rows = conn.execute(text(f"""
+    # 챔프풀 + 주력 의존도
+    pool_rows = conn.execute(text(f"""
         WITH player_champ AS (
             SELECT gp.player_id, gp.champion_id, COUNT(*) AS games
             FROM game_participants gp
@@ -209,30 +200,162 @@ def get_position_averages(position: str, conn, season_id: str | None = None) -> 
             GROUP BY player_id
             HAVING SUM(games) >= 5
         )
-        SELECT AVG(pool::float), AVG(top_games::float / total)
+        SELECT
+            AVG(pool::float)                  AS avg_pool,
+            STDDEV(pool::float)               AS std_pool,
+            AVG(top_games::float / total)     AS avg_dep,
+            STDDEV(top_games::float / total)  AS std_dep,
+            PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY pool::float) AS p90_pool,
+            PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY pool::float) AS p10_pool,
+            PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY top_games::float / total) AS p10_dep,
+            PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY top_games::float / total) AS p90_dep
         FROM player_agg
     """), params).fetchone()
 
-    avg_pool = float(rows[0]) if rows and rows[0] is not None else 5.0
-    avg_dep  = float(rows[1]) if rows and rows[1] is not None else 0.35
+    avg_pool  = float(pool_rows[0]) if pool_rows and pool_rows[0] else 5.0
+    p90_pool  = float(pool_rows[4]) if pool_rows and pool_rows[4] else avg_pool * 1.5
+    p10_pool  = float(pool_rows[5]) if pool_rows and pool_rows[5] else 1.0
+    avg_dep   = float(pool_rows[2]) if pool_rows and pool_rows[2] else 0.35
+    p10_dep   = float(pool_rows[6]) if pool_rows and pool_rows[6] else 0.15
+    p90_dep   = float(pool_rows[7]) if pool_rows and pool_rows[7] else 0.60
 
-    # wr_drop / gold15_volatility는 표본 부족 시 휴리스틱 유지
-    drop_defaults = {"top": 0.10, "jng": 0.08, "mid": 0.12, "bot": 0.15, "sup": 0.07}
-    vdelta_defaults = {"top": 350.0, "jng": 280.0, "mid": 320.0, "bot": 400.0, "sup": 220.0}
+    # wr_drop / gold15_volatility: 선수별 실제 분포
+    # 각 포지션 선수의 주력 챔피언 blocked 승률 하락폭 집계
+    drop_rows = conn.execute(text(f"""
+        WITH pos_players AS (
+            SELECT DISTINCT gp.player_id
+            FROM game_participants gp
+            WHERE gp.position = :pos
+              AND gp.champion_id IS NOT NULL
+              {s_filter}
+            GROUP BY gp.player_id
+            HAVING COUNT(*) >= 5
+        ),
+        top_champs AS (
+            SELECT gp.player_id, gp.champion_id, COUNT(*) AS games,
+                   AVG(gt.result::int) AS normal_wr,
+                   STDDEV(gt.gold_at_15) AS normal_std,
+                   ROW_NUMBER() OVER (PARTITION BY gp.player_id ORDER BY COUNT(*) DESC) AS rn
+            FROM game_participants gp
+            JOIN game_teams gt ON gt.game_id = gp.game_id AND gt.team_id = gp.team_id
+            JOIN pos_players pp ON pp.player_id = gp.player_id
+            WHERE gp.champion_id IS NOT NULL
+              {s_filter}
+            GROUP BY gp.player_id, gp.champion_id
+            HAVING COUNT(*) >= 2
+        ),
+        blocked AS (
+            SELECT tc.player_id,
+                   AVG(gt.result::int) AS blocked_wr,
+                   STDDEV(gt.gold_at_15) AS blocked_std,
+                   COUNT(*) AS cnt
+            FROM top_champs tc
+            JOIN picks_bans pb ON pb.champion_id = tc.champion_id
+              AND pb.phase = 'ban'
+            JOIN game_teams gt ON gt.game_id = pb.game_id AND gt.player_id = tc.player_id
+            WHERE tc.rn = 1
+            GROUP BY tc.player_id
+            HAVING COUNT(*) >= 1
+        ),
+        player_drops AS (
+            SELECT tc.player_id,
+                   GREATEST(0, tc.normal_wr - COALESCE(b.blocked_wr, tc.normal_wr)) AS wr_drop,
+                   GREATEST(0, COALESCE(b.blocked_std, tc.normal_std) - tc.normal_std) AS vdelta
+            FROM top_champs tc
+            LEFT JOIN blocked b ON b.player_id = tc.player_id
+            WHERE tc.rn = 1
+        )
+        SELECT
+            AVG(wr_drop)                                                    AS avg_drop,
+            PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY wr_drop)           AS p90_drop,
+            PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY wr_drop)           AS p10_drop,
+            AVG(vdelta)                                                     AS avg_vdelta,
+            PERCENTILE_CONT(0.9) WITHIN GROUP (ORDER BY vdelta)            AS p90_vdelta,
+            PERCENTILE_CONT(0.1) WITHIN GROUP (ORDER BY vdelta)            AS p10_vdelta
+        FROM player_drops
+    """), params).fetchone()
+
+    avg_drop   = float(drop_rows[0]) if drop_rows and drop_rows[0] else 0.10
+    p90_drop   = float(drop_rows[1]) if drop_rows and drop_rows[1] else avg_drop * 2
+    p10_drop   = float(drop_rows[2]) if drop_rows and drop_rows[2] else 0.0
+    avg_vdelta = float(drop_rows[3]) if drop_rows and drop_rows[3] else 300.0
+    p90_vdelta = float(drop_rows[4]) if drop_rows and drop_rows[4] else avg_vdelta * 2
+    p10_vdelta = float(drop_rows[5]) if drop_rows and drop_rows[5] else 0.0
 
     return {
-        "champ_pool_size":          avg_pool,
-        "primary_dependency":       avg_dep,
-        "wr_drop_when_banned":      drop_defaults.get(position, 0.10),
-        "gold15_volatility_delta":  vdelta_defaults.get(position, 300.0),
+        "champ_pool_size":         avg_pool,
+        "p10_pool": p10_pool, "p90_pool": p90_pool,
+        "primary_dependency":      avg_dep,
+        "p10_dep":  p10_dep,  "p90_dep":  p90_dep,
+        "wr_drop_when_banned":     avg_drop,
+        "p10_drop": p10_drop, "p90_drop": p90_drop,
+        "gold15_volatility_delta": avg_vdelta,
+        "p10_vdelta": p10_vdelta, "p90_vdelta": p90_vdelta,
     }
+
+
+def _percentile_score(val: float, p10_best: float, p90_worst: float) -> float:
+    """
+    실제 LCK 분포 기반 0~100 점수화
+    p10_best: 분포 상위 10% (좋은 방향)
+    p90_worst: 분포 하위 10% (나쁜 방향)
+    """
+    if p90_worst == p10_best:
+        return 50.0
+    score = (p90_worst - val) / (p90_worst - p10_best) * 100
+    return round(max(0.0, min(100.0, score)), 1)
+
+
+def _compute_ban_resistance(stats: dict, position_avg: dict) -> tuple[float, dict]:
+    """
+    밴 내성 점수 0~100 계산 (LCK 분포 percentile 기반, 동등 가중치 25%씩)
+    반환: (종합점수, 지표별 점수 dict)
+    """
+    if not stats:
+        return 50.0, {}
+
+    # 각 지표를 LCK 분포 기반으로 0~100 점수화
+    # 챔프풀: 높을수록 좋음 → p90이 best, p10이 worst
+    pool_score = _percentile_score(
+        stats["champ_pool_size"],
+        p10_best=position_avg.get("p90_pool", 10.0),
+        p90_worst=position_avg.get("p10_pool", 1.0),
+    )
+    # 주력 의존도: 낮을수록 좋음 → p10이 best, p90이 worst
+    dep_score = _percentile_score(
+        stats["primary_dependency"],
+        p10_best=position_avg.get("p10_dep", 0.15),
+        p90_worst=position_avg.get("p90_dep", 0.60),
+    )
+    # WR 하락폭: 낮을수록 좋음 → p10이 best, p90이 worst
+    drop_score = _percentile_score(
+        stats["wr_drop_when_banned"],
+        p10_best=position_avg.get("p10_drop", 0.0),
+        p90_worst=position_avg.get("p90_drop", 0.30),
+    )
+    # Gold 변동성: 낮을수록 좋음 → p10이 best, p90이 worst
+    stab_score = _percentile_score(
+        stats["gold15_volatility_delta"],
+        p10_best=position_avg.get("p10_vdelta", 0.0),
+        p90_worst=position_avg.get("p90_vdelta", 600.0),
+    )
+
+    raw = (pool_score + dep_score + drop_score + stab_score) / 4
+    score = round(min(100.0, max(0.0, raw)), 1)
+
+    breakdown = {
+        "pool_score":  pool_score,
+        "dep_score":   dep_score,
+        "drop_score":  drop_score,
+        "stab_score":  stab_score,
+    }
+    return score, breakdown
 
 
 def get_ban_resistance(player_name: str, team_name: str | None = None,
                        season_id: str | None = None) -> dict:
     """
-    선수 밴 내성 지수 반환 (피어리스 보정 적용)
-    "주력 챔피언 사용 불가" = 상대 밴 OR 피어리스 앞 경기 픽
+    선수 밴 내성 지수 반환 (피어리스 보정 + top3 주력 챔피언 + percentile 기반 점수)
     """
     engine = get_engine()
     with engine.connect() as conn:
@@ -262,7 +385,7 @@ def get_ban_resistance(player_name: str, team_name: str | None = None,
 
         raw = _get_player_raw_stats(pid, team_id, conn, season_id)
         pos_avg = get_position_averages(position, conn, season_id)
-        score = _compute_ban_resistance(raw, pos_avg)
+        score, breakdown = _compute_ban_resistance(raw, pos_avg)
 
         conn.execute(text("""
             INSERT INTO player_profiles
@@ -283,6 +406,7 @@ def get_ban_resistance(player_name: str, team_name: str | None = None,
         "player": player_name,
         "position": position,
         "ban_resistance_score": score,
+        "score_breakdown": breakdown,
         "champ_pool_size": raw.get("champ_pool_size", 0),
         "primary_dependency": round(raw.get("primary_dependency", 0), 3),
         "wr_drop_when_banned": round(raw.get("wr_drop_when_banned", 0), 3),
@@ -290,9 +414,9 @@ def get_ban_resistance(player_name: str, team_name: str | None = None,
         "gold15_stddev_banned": round(raw.get("gold15_stddev_banned", 0), 1),
         "gold15_volatility_delta": round(raw.get("gold15_volatility_delta", 0), 1),
         "primary_champion": raw.get("primary_champ"),
-        # 피어리스 보정 상세
-        "banned_games_count": raw.get("banned_games_count", 0),       # 상대 밴
-        "prev_used_games_count": raw.get("prev_used_games_count", 0), # 피어리스 앞경기 픽
-        "blocked_games_count": raw.get("blocked_games_count", 0),     # 합산 (사용 불가 경기 총합)
+        "primary_champions_top3": raw.get("primary_champs_top3", []),
+        "banned_games_count": raw.get("banned_games_count", 0),
+        "prev_used_games_count": raw.get("prev_used_games_count", 0),
+        "blocked_games_count": raw.get("blocked_games_count", 0),
         "lck_avg_benchmark": pos_avg,
     }

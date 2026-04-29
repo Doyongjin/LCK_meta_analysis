@@ -599,34 +599,33 @@ def show_scenario_f(fn, players, player_positions, season_id=None):
         st.markdown("""
 **밴 내성 지수란?** 0~100점. 주력 챔피언을 밴당해도 선수가 얼마나 잘 버틸 수 있는지를 측정.
 
-#### 점수 구성 (가중치)
-| 요소 | 가중치 | 의미 |
+#### 점수 구성 — LCK 실제 분포 기반 (각 25%)
+| 요소 | 의미 | 좋은 방향 |
 |---|---|---|
-| 챔피언 풀 | 25% | 시즌 내 사용한 챔피언 종류 (1경기 이상) |
-| 주력 의존도 | 28% | 가장 많이 쓴 챔피언이 전체 경기에서 차지하는 비율 (낮을수록 좋음) |
-| 밴 시 승률 하락 | 27% | 주력 사용 불가 시 승률이 얼마나 떨어지는지 |
-| 골드 변동성 증가 | 20% | 주력 사용 불가 시 15분 골드의 표준편차 증가폭 |
+| 챔피언 풀 | 시즌 내 사용한 챔피언 종류 (1경기 이상) | 많을수록 ↑ |
+| 주력 의존도 | 가장 많이 쓴 챔피언이 전체 경기에서 차지하는 비율 | 낮을수록 ↑ |
+| 밴 시 승률 하락 | 주력 top3 사용 불가 시 평균 승률 하락폭 | 낮을수록 ↑ |
+| 골드 변동성 증가 | 주력 사용 불가 시 15분 골드 표준편차 증가폭 | 낮을수록 ↑ |
+
+> 각 지표는 LCK 동일 포지션 선수들의 실제 분포(상위 10% ~ 하위 10%)를 기준으로 점수화.
+> 임의 가중치 없이 4개 지표 동등 적용.
 
 #### 점수 해석
-- **70점 이상**: 밴 내성 매우 높음 → 챔프폭 넓고 대체 챔피언으로도 강함
-- **50점 근처**: 라인 평균 수준
-- **30점 이하**: 특정 챔피언에 의존 → 저격 밴이 효과적
+- **70점 이상**: 밴 내성 매우 높음 → LCK 상위 30% 수준, 저격 밴 효과 낮음
+- **50점 근처**: LCK 평균 수준
+- **30점 이하**: LCK 하위 30% → 특정 챔피언 의존, 저격 밴이 효과적
 
-#### 각 지표 해석
-- **밴 시 승률 유지(=hr_drop)**:
-  - **0%**: 주력과 대체 챔의 실력 차 거의 없음 (밴해도 무의미)
-  - **10~20%**: 평균적인 영향
-  - **30%+**: 주력 의존 매우 강함 → 저격 밴이 결정적
-- **골드 변동성 증가**:
-  - **0~50**: 주력 없어도 안정적 운영
-  - **50~100**: 중간 영향
-  - **+100 이상**: 주력 없으면 팀 전체 흔들림 (스타 선수형 OR 챔프폭 부족)
-- **챔피언 풀 + 골드 변동성** 함께 보기:
-  - 풀 5개+ & 변동성 큼 → **팀이 그 선수에게 의존**
-  - 풀 2-3개 & 변동성 큼 → **챔프폭 부족 약점**
+#### 지표별 점수 해석 (레이더 차트)
+- **100점**: LCK 상위 10% (해당 포지션 최상위)
+- **50점**: LCK 평균
+- **0점**: LCK 하위 10%
+
+#### 주력 챔피언 기준
+- 2경기 이상 플레이한 챔피언 **top3** 기준으로 평균 영향 측정
+- 1개 챔피언만 보는 것보다 실제 밴 상황을 더 정확하게 반영
 
 #### 주의사항
-⚠️ **표본 부족 시 극단값**: 시즌이 짧거나 밴당한 경기가 적으면 0% 또는 100% 같은 극단값이 나올 수 있음. 카드 하단의 "사용 불가 사유" 경기 수가 3개 미만이면 신뢰도 낮음.
+⚠️ **표본 부족 시 극단값**: 밴당한 경기가 3개 미만이면 신뢰도 낮음.
 
 #### 피어리스 보정
 주력 챔피언 "사용 불가"는 두 가지를 합산:
@@ -644,49 +643,58 @@ def show_scenario_f(fn, players, player_positions, season_id=None):
                                    ["(없음)"] + same, key="f_p2")
         compare = None if compare_raw == "(없음)" else compare_raw
 
-    team_name1 = None
-    team_name2 = None
-
     if not st.button("분석", key="f_run"):
         return
 
     import plotly.graph_objects as go
 
-    def _norm(val, best, worst):
-        if best == worst:
-            return 50.0
-        return max(0.0, min(100.0, (val - worst) / (best - worst) * 100))
-
-    def _radar_vals(result, avg):
-        avg_vdelta = avg.get("gold15_volatility_delta", 300.0)
+    def _radar_vals(result):
+        bd = result.get("score_breakdown", {})
         return [
-            _norm(result["champ_pool_size"], avg.get("champ_pool_size", 5) * 2, 0),
-            _norm(result["primary_dependency"], 0, avg.get("primary_dependency", 0.35) * 2),
-            _norm(result["wr_drop_when_banned"], 0, avg.get("wr_drop_when_banned", 0.1) * 2),
-            _norm(result["gold15_volatility_delta"], 0, avg_vdelta * 2),
-            _norm(result["champ_pool_size"], avg.get("champ_pool_size", 5) * 2, 0),  # 닫힘
+            bd.get("pool_score", 50),
+            bd.get("dep_score", 50),
+            bd.get("drop_score", 50),
+            bd.get("stab_score", 50),
+            bd.get("pool_score", 50),  # 닫힘
         ]
 
+    def _pct_label(score):
+        if score >= 90: return "상위 10%"
+        if score >= 70: return "상위 30%"
+        if score >= 50: return "평균 수준"
+        if score >= 30: return "하위 30%"
+        return "하위 10%"
+
     def _metrics(result, label):
-        st.caption(f"**{label}** — 밴 내성: {result['ban_resistance_score']:.1f}/100")
+        score = result["ban_resistance_score"]
+        top3 = result.get("primary_champions_top3", [result.get("primary_champion") or "-"])
+        top3_str = " / ".join(top3) if top3 else "-"
+        st.caption(f"**{label}** — 밴 내성: **{score:.1f}/100** ({_pct_label(score)})")
         m1, m2, m3, m4 = st.columns(4)
         m1.metric("챔피언 풀", f"{result['champ_pool_size']}개")
         m2.metric("밴 시 승률 하락", f"{result['wr_drop_when_banned']:.1%}")
         delta_str = f"+{result['gold15_volatility_delta']:.0f}" if result["gold15_volatility_delta"] > 0 else "0"
         m3.metric("골드 변동성 증가", f"{result['gold15_volatility_delta']:.0f}골드",
                   delta=delta_str, delta_color="inverse")
-        m4.metric("주력 챔피언", result["primary_champion"] or "-")
+        m4.metric("주력 챔피언 (top3)", top3_str)
+
+        bd = result.get("score_breakdown", {})
+        if bd:
+            b1, b2, b3, b4 = st.columns(4)
+            b1.caption(f"풀 점수: **{bd.get('pool_score', 0):.0f}**")
+            b2.caption(f"의존도 점수: **{bd.get('dep_score', 0):.0f}**")
+            b3.caption(f"밴 시 점수: **{bd.get('drop_score', 0):.0f}**")
+            b4.caption(f"안정성 점수: **{bd.get('stab_score', 0):.0f}**")
 
     with st.spinner("분석 중..."):
-        r1 = fn(player, team_name1, season_id=season_id)
-        r2 = fn(compare, team_name2, season_id=season_id) if compare else None
+        r1 = fn(player, None, season_id=season_id)
+        r2 = fn(compare, None, season_id=season_id) if compare else None
 
     if "error" in r1:
         st.error(r1["error"])
         return
 
     categories = ["챔피언 풀", "주력 의존도↓", "밴 시 승률 유지", "골드 안정성", "챔피언 풀"]
-    avg = r1["lck_avg_benchmark"]
 
     _metrics(r1, player)
     if r2 and "error" not in r2:
@@ -694,7 +702,8 @@ def show_scenario_f(fn, players, player_positions, season_id=None):
 
     with st.expander("Gold@15 변동성 상세"):
         cx1, cx2 = st.columns(2)
-        cx1.metric(f"{r1['primary_champion']} 픽 시 팀 골드 표준편차",
+        top3_str = " / ".join(r1.get("primary_champions_top3", [])) or r1.get("primary_champion") or "-"
+        cx1.metric(f"{top3_str} 픽 시 팀 골드 표준편차",
                    f"{r1['gold15_stddev_normal']:.0f}골드")
         cx2.metric("주력 사용 불가 시 팀 골드 표준편차",
                    f"{r1['gold15_stddev_banned']:.0f}골드",
@@ -707,29 +716,30 @@ def show_scenario_f(fn, players, player_positions, season_id=None):
         bc1.metric("상대 밴", f"{r1.get('banned_games_count', 0)}경기")
         bc2.metric("피어리스 앞 경기 픽", f"{r1.get('prev_used_games_count', 0)}경기")
         bc3.metric("총 사용 불가", f"{r1.get('blocked_games_count', 0)}경기")
-        st.caption("피어리스 시리즈에서 같은 챔피언을 앞 경기에 이미 썼다면 후속 경기에선 강제로 다른 챔피언을 픽해야 합니다. 이 경우도 '주력 사용 불가'로 집계됩니다.")
+        st.caption("피어리스 시리즈에서 같은 챔피언을 앞 경기에 이미 썼다면 후속 경기에선 강제로 다른 챔피언을 픽해야 합니다.")
 
-    # 레이더 차트 (비교 시 오버레이)
+    # 레이더 차트
     fig = go.Figure()
     fig.add_trace(go.Scatterpolar(
-        r=_radar_vals(r1, avg), theta=categories,
-        fill="toself", name=player, line=dict(color="#2196F3"),
+        r=_radar_vals(r1), theta=categories,
+        fill="toself", name=player,
+        line=dict(color="#2196F3"), fillcolor="rgba(33,150,243,0.15)",
     ))
     if r2 and "error" not in r2:
         fig.add_trace(go.Scatterpolar(
-            r=_radar_vals(r2, r2["lck_avg_benchmark"]), theta=categories,
-            fill="toself", name=compare, line=dict(color="#FF9800"),
-            fillcolor="rgba(255,152,0,0.15)",
+            r=_radar_vals(r2), theta=categories,
+            fill="toself", name=compare,
+            line=dict(color="#FF9800"), fillcolor="rgba(255,152,0,0.15)",
         ))
-    avg_vdelta = avg.get("gold15_volatility_delta", 300.0)
     fig.add_trace(go.Scatterpolar(
-        r=[50, 50, 50, _norm(avg_vdelta, 0, avg_vdelta * 2), 50],
-        theta=categories, fill="toself", name="LCK 평균",
+        r=[50, 50, 50, 50, 50], theta=categories,
+        fill="toself", name="LCK 평균",
         line=dict(dash="dash", color="rgba(150,150,150,0.6)"),
-        fillcolor="rgba(200,200,200,0.2)",
+        fillcolor="rgba(200,200,200,0.15)",
     ))
     fig.update_layout(
-        polar=dict(radialaxis=dict(range=[0, 100], showticklabels=False)),
+        polar=dict(radialaxis=dict(range=[0, 100], tickvals=[25, 50, 75],
+                                   ticktext=["하위30%", "평균", "상위30%"])),
         legend=dict(x=0.85, y=1.1),
     )
     st.plotly_chart(fig, use_container_width=True)
