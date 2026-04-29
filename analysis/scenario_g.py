@@ -4,7 +4,7 @@ F 결과를 팀 단위로 합산해 팀 색깔 분류 + 진영/패치/상대팀 
 """
 import numpy as np
 from sqlalchemy import text
-from .db import get_engine
+from .db import get_engine, build_game_filter
 from .scenario_f import get_ban_resistance
 
 
@@ -34,7 +34,8 @@ def classify_team(ban_resistance_avg: float, gold15_avg: float,
     return "late_comeback"
 
 
-def get_team_profile(team_name: str, season_id: str | None = None) -> dict:
+def get_team_profile(team_name: str, season_id: str | None = None,
+                     patch_id: str | None = None) -> dict:
     """
     팀 색깔 프로파일
     반환:
@@ -62,7 +63,7 @@ def get_team_profile(team_name: str, season_id: str | None = None) -> dict:
             return {"error": f"팀 없음: {team_name}"}
         tid, tname = team
 
-        # 시즌 필터 구성 (없으면 가장 최신 시즌)
+        # 시즌/패치 필터 구성 (없으면 가장 최신 시즌)
         # season_id는 games → series 경유 (games 테이블에 season_id 없음)
         if season_id:
             season_join_gt    = "JOIN series s ON s.series_id = g.series_id"
@@ -77,6 +78,11 @@ def get_team_profile(team_name: str, season_id: str | None = None) -> dict:
             season_filter_pth = f"AND pth.season_id = {latest_subq}"
             season_params_gt  = {"tid": tid}
             season_params_pth = {"tid": tid}
+
+        if patch_id:
+            season_join_gt = season_join_gt or "JOIN series s ON s.series_id = g.series_id"
+            season_filter_gt += " AND g.patch_id = :patch_id"
+            season_params_gt["patch_id"] = patch_id
 
         # 팀 경기 통계
         game_stats = conn.execute(text(f"""
@@ -148,7 +154,8 @@ def get_team_profile(team_name: str, season_id: str | None = None) -> dict:
     }
 
 
-def get_role_priority(team_name: str, season_id: str | None = None) -> dict:
+def get_role_priority(team_name: str, season_id: str | None = None,
+                      patch_id: str | None = None) -> dict:
     """
     팀의 포지션별 평균 픽 순서 (1=가장 먼저, 5=가장 나중)
     반환:
@@ -170,15 +177,8 @@ def get_role_priority(team_name: str, season_id: str | None = None) -> dict:
             return {"error": f"팀 없음: {team_name}"}
         tid = team[0]
 
-        s_filter = ""
-        params: dict = {"tid": tid}
-        if season_id:
-            s_filter = """AND pb.game_id IN (
-                SELECT g.game_id FROM games g
-                JOIN series s ON s.series_id = g.series_id
-                WHERE s.season_id = :sid
-            )"""
-            params["sid"] = season_id
+        s_filter, sf_params = build_game_filter(season_id, patch_id, alias="pb")
+        params: dict = {"tid": tid, **sf_params}
 
         rows = conn.execute(text(f"""
             SELECT gp.position, pb.team_pick_order, COUNT(*) AS cnt
@@ -219,7 +219,8 @@ def get_role_priority(team_name: str, season_id: str | None = None) -> dict:
     return {"team": team_name, "roles": result_roles}
 
 
-def get_all_team_profiles(season_id: str | None = None) -> list:
+def get_all_team_profiles(season_id: str | None = None,
+                          patch_id: str | None = None) -> list:
     """LCK 전 팀 프로파일 목록 — 해당 시즌에 실제 경기가 있는 팀만"""
     engine = get_engine()
     with engine.connect() as conn:
@@ -247,4 +248,4 @@ def get_all_team_profiles(season_id: str | None = None) -> list:
                 ORDER BY t.name
             """)).fetchall()
 
-    return [get_team_profile(t[0], season_id) for t in teams]
+    return [get_team_profile(t[0], season_id, patch_id) for t in teams]

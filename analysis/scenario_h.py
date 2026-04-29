@@ -7,7 +7,7 @@ LCK 동일 라인 평균 대비 이 선수가 유독 잘하는 챔피언 식별
   - 후반 경기 픽이 높으면 강제 픽일 가능성 → 스페셜리스트 신뢰도 하락
 """
 from sqlalchemy import text
-from .db import get_engine
+from .db import get_engine, build_game_filter
 
 POS_ORDER = ["top", "jng", "mid", "bot", "sup"]
 
@@ -83,7 +83,8 @@ JOKER_MIN_WR_SOLO = 1.00     # 1경기일 때 본인 승률 최소 (= 100%)
 
 
 def get_specialist_champions(player_name: str,
-                              season_id: str | None = None) -> dict:
+                              season_id: str | None = None,
+                              patch_id: str | None = None) -> dict:
     """
     선수의 스페셜리스트 챔피언 목록
     season_id 지정 시 해당 시즌 게임만 집계 (LCK 평균도 동일 시즌 기준)
@@ -106,15 +107,8 @@ def get_specialist_champions(player_name: str,
         """), {"pid": pid}).fetchone()
         position = pos_row[0] if pos_row else "mid"
 
-        s_filter = ""
-        s_params_base: dict = {}
-        if season_id:
-            s_filter = """AND gp.game_id IN (
-                SELECT g.game_id FROM games g
-                JOIN series s ON s.series_id = g.series_id
-                WHERE s.season_id = :sid
-            )"""
-            s_params_base["sid"] = season_id
+        s_filter, sf_params = build_game_filter(season_id, patch_id, alias="gp")
+        s_params_base: dict = {**sf_params}
 
         # 선수 챔피언별 통계 + 피어리스 후반(>=2경기) 픽 카운트
         player_stats = conn.execute(text(f"""

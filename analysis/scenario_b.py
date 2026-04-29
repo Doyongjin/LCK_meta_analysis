@@ -3,11 +3,12 @@
 같은 선수가 블루/레드 진영에서 고르는 챔피언 목록 분석
 """
 from sqlalchemy import text
-from .db import get_engine
+from .db import get_engine, build_game_filter
 
 
 def get_side_champion_preference(player_name: str,
-                                  season_id: str | None = None) -> dict:
+                                  season_id: str | None = None,
+                                  patch_id: str | None = None) -> dict:
     """
     선수의 블루/레드 진영별 챔피언 사용 현황
     season_id 지정 시 해당 시즌 게임만 집계
@@ -37,15 +38,8 @@ def get_side_champion_preference(player_name: str,
             return {"error": f"선수 없음: {player_name}"}
         pid = player[0]
 
-        s_filter = ""
-        params: dict = {"pid": pid}
-        if season_id:
-            s_filter = """AND gp.game_id IN (
-                SELECT g.game_id FROM games g
-                JOIN series s ON s.series_id = g.series_id
-                WHERE s.season_id = :sid
-            )"""
-            params["sid"] = season_id
+        s_filter, sf_params = build_game_filter(season_id, patch_id, alias="gp")
+        params: dict = {"pid": pid, **sf_params}
 
         rows = conn.execute(text(f"""
             SELECT

@@ -90,7 +90,29 @@ with st.sidebar:
         index=1 if _seasons else 0,
     )
     season_id = None if selected_season == "전체" else selected_season
-    st.caption(f"선택: {selected_season}")
+
+    # 패치 버전 선택 (시즌 선택 시에만 표시)
+    patch_id = None
+    if season_id:
+        with _eng.connect() as _pc:
+            _patches = [r[0] for r in _pc.execute(
+                _text("""
+                    SELECT DISTINCT g.patch_id
+                    FROM games g
+                    JOIN series s ON s.series_id = g.series_id
+                    WHERE s.season_id = :sid AND g.patch_id IS NOT NULL
+                    ORDER BY g.patch_id DESC
+                """), {"sid": season_id}
+            ).fetchall()]
+        if _patches:
+            _patch_options = _patches + ["전체 (시즌 전체)"]
+            selected_patch = st.selectbox(
+                "패치 버전",
+                options=_patch_options,
+                index=0,  # 기본값: 최신 패치
+            )
+            patch_id = None if selected_patch == "전체 (시즌 전체)" else selected_patch
+
     st.divider()
 
     page = st.radio(
@@ -338,7 +360,7 @@ D (단순 카운팅) > B > H (N≥10) > I 게임WR > F 세부지표 > G 레이�
 # ─────────────────────────────────────────────
 # A. 밴 시 승률 영향
 # ─────────────────────────────────────────────
-def show_scenario_a(fn, players, player_positions, season_id=None):
+def show_scenario_a(fn, players, player_positions, season_id=None, patch_id=None):
     st.title("A. 핵심 챔피언 밴 시 승률 영향")
 
     with st.expander("📖 해석 가이드", expanded=False):
@@ -369,7 +391,7 @@ def show_scenario_a(fn, players, player_positions, season_id=None):
     import pandas as pd
 
     def _run(name):
-        return fn(name, top_n=top_n, season_id=season_id)
+        return fn(name, top_n=top_n, season_id=season_id, patch_id=patch_id)
 
     def _render(result, title):
         if "error" in result:
@@ -418,7 +440,7 @@ def show_scenario_a(fn, players, player_positions, season_id=None):
 # ─────────────────────────────────────────────
 # B. 진영별 챔피언 성향
 # ─────────────────────────────────────────────
-def show_scenario_b(fn, players, player_positions, season_id=None):
+def show_scenario_b(fn, players, player_positions, season_id=None, patch_id=None):
     st.title("B. 진영별 챔피언 선택 변화")
 
     with st.expander("📖 해석 가이드", expanded=False):
@@ -459,8 +481,8 @@ def show_scenario_b(fn, players, player_positions, season_id=None):
                               "red_games", "red_wr"]], hide_index=True)
 
     with st.spinner("분석 중..."):
-        r1 = fn(player, season_id=season_id)
-        r2 = fn(compare, season_id=season_id) if compare else None
+        r1 = fn(player, season_id=season_id, patch_id=patch_id)
+        r2 = fn(compare, season_id=season_id, patch_id=patch_id) if compare else None
 
     if r2:
         c1, c2 = st.columns(2)
@@ -516,7 +538,7 @@ def show_scenario_c(fn):
 # ─────────────────────────────────────────────
 # D. 저격 밴 패턴
 # ─────────────────────────────────────────────
-def show_scenario_d(fn, teams, season_id=None):
+def show_scenario_d(fn, teams, season_id=None, patch_id=None):
     st.title("D. 저격 밴 패턴")
 
     with st.expander("📖 해석 가이드", expanded=False):
@@ -580,8 +602,8 @@ def show_scenario_d(fn, teams, season_id=None):
             st.divider()
 
     with st.spinner("분석 중..."):
-        r1 = fn(team1, season_id)
-        r2 = fn(compare_team, season_id) if compare_team else None
+        r1 = fn(team1, season_id, patch_id)
+        r2 = fn(compare_team, season_id, patch_id) if compare_team else None
 
     if r2:
         c1, c2 = st.columns(2)
@@ -647,7 +669,7 @@ def show_scenario_e(fn, patches):
 # ─────────────────────────────────────────────
 # F. 밴 내성 지수
 # ─────────────────────────────────────────────
-def show_scenario_f(fn, players, player_positions, season_id=None):
+def show_scenario_f(fn, players, player_positions, season_id=None, patch_id=None):
     st.title("F. 밴 내성 지수")
 
     with st.expander("📖 해석 가이드", expanded=False):
@@ -742,8 +764,8 @@ def show_scenario_f(fn, players, player_positions, season_id=None):
             b4.caption(f"안정성 점수: **{bd.get('stab_score', 0):.0f}**")
 
     with st.spinner("분석 중..."):
-        r1 = fn(player, None, season_id=season_id)
-        r2 = fn(compare, None, season_id=season_id) if compare else None
+        r1 = fn(player, None, season_id=season_id, patch_id=patch_id)
+        r2 = fn(compare, None, season_id=season_id, patch_id=patch_id) if compare else None
 
     if "error" in r1:
         st.error(r1["error"])
@@ -804,16 +826,16 @@ def show_scenario_f(fn, players, player_positions, season_id=None):
 # G. 팀 색깔 프로파일
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def _cached_team_profile(team_name, season_id):
+def _cached_team_profile(team_name, season_id, patch_id=None):
     from analysis.scenario_g import get_team_profile
-    return get_team_profile(team_name, season_id)
+    return get_team_profile(team_name, season_id, patch_id)
 
 @st.cache_data(ttl=3600)
-def _cached_all_team_profiles(season_id):
+def _cached_all_team_profiles(season_id, patch_id=None):
     from analysis.scenario_g import get_all_team_profiles
-    return get_all_team_profiles(season_id)
+    return get_all_team_profiles(season_id, patch_id)
 
-def show_scenario_g(fn_single, fn_all, teams, season_id=None):
+def show_scenario_g(fn_single, fn_all, teams, season_id=None, patch_id=None):
     st.title("G. 팀 색깔 프로파일")
 
     with st.expander("📖 해석 가이드", expanded=False):
@@ -871,8 +893,8 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
             return
 
         with st.spinner("분석 중..."):
-            r1 = _cached_team_profile(team1, season_id)
-            r2 = _cached_team_profile(team2, season_id)
+            r1 = _cached_team_profile(team1, season_id, patch_id)
+            r2 = _cached_team_profile(team2, season_id, patch_id)
 
         for r in (r1, r2):
             if "error" in r:
@@ -1025,7 +1047,7 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
         if not st.button("전체 분석", key="g_all_run"):
             return
         with st.spinner("전체 팀 분석 중..."):
-            results = _cached_all_team_profiles(season_id)
+            results = _cached_all_team_profiles(season_id, patch_id)
 
         import plotly.express as px
         import pandas as pd
@@ -1056,7 +1078,7 @@ def show_scenario_g(fn_single, fn_all, teams, season_id=None):
 # ─────────────────────────────────────────────
 # H. 스페셜리스트 챔피언
 # ─────────────────────────────────────────────
-def _show_scenario_h_team(roster_fn, specialist_fn, teams, season_id):
+def _show_scenario_h_team(roster_fn, specialist_fn, teams, season_id, patch_id=None):
     """팀 비교 모드 — 팀 선택 → 포지션별 행 (콜업 있는 포지션만 드롭다운) → 분석"""
     import pandas as pd
     import plotly.graph_objects as go
@@ -1189,8 +1211,8 @@ def _show_scenario_h_team(roster_fn, specialist_fn, teams, season_id):
         st.divider()
         st.markdown(f"### {POS_LABEL[pos]}")
         with st.spinner(f"{POS_LABEL[pos]} 분석 중..."):
-            r_a = specialist_fn(sel_a, season_id=season_id) if sel_a else {}
-            r_b = specialist_fn(sel_b, season_id=season_id) if sel_b else {}
+            r_a = specialist_fn(sel_a, season_id=season_id, patch_id=patch_id) if sel_a else {}
+            r_b = specialist_fn(sel_b, season_id=season_id, patch_id=patch_id) if sel_b else {}
         champs_a = r_a.get("all_champions", []) if "error" not in r_a else []
         champs_b = r_b.get("all_champions", []) if "error" not in r_b else []
 
@@ -1307,7 +1329,7 @@ def _generate_h_scenario_pdf(player_name, position, results_df):
     return buffer.getvalue()
 
 
-def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=None, teams=None):
+def show_scenario_h(fn, players, player_positions, season_id=None, patch_id=None, roster_fn=None, teams=None):
     st.title("H. 스페셜리스트 챔피언")
 
     with st.expander("📖 해석 가이드", expanded=False):
@@ -1354,7 +1376,7 @@ def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=Non
     mode = st.radio("모드", ["개인 분석", "팀 비교"], horizontal=True, key="h_mode")
 
     if mode == "팀 비교":
-        _show_scenario_h_team(roster_fn, fn, teams, season_id)
+        _show_scenario_h_team(roster_fn, fn, teams, season_id, patch_id)
         return
 
     player, compare = _player_compare_ui(players, player_positions, "h")
@@ -1363,8 +1385,8 @@ def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=Non
         return
 
     with st.spinner("분석 중..."):
-        r1 = fn(player, season_id=season_id)
-        r2 = fn(compare, season_id=season_id) if compare else None
+        r1 = fn(player, season_id=season_id, patch_id=patch_id)
+        r2 = fn(compare, season_id=season_id, patch_id=patch_id) if compare else None
 
     if "error" in r1:
         st.error(r1["error"])
@@ -1540,12 +1562,12 @@ def show_scenario_h(fn, players, player_positions, season_id=None, roster_fn=Non
 # I. 저격 밴 실효성
 # ─────────────────────────────────────────────
 @st.cache_data(ttl=3600)
-def _cached_snipe_effectiveness(team_name, season_id):
+def _cached_snipe_effectiveness(team_name, season_id, patch_id=None):
     from analysis.scenario_i import get_snipe_effectiveness
-    return get_snipe_effectiveness(team_name, season_id)
+    return get_snipe_effectiveness(team_name, season_id, patch_id)
 
 
-def show_scenario_i(_fn, teams, season_id=None):
+def show_scenario_i(_fn, teams, season_id=None, patch_id=None):
     st.title("I. 저격 밴 실효성")
 
     with st.expander("📖 해석 가이드", expanded=False):
@@ -1794,8 +1816,8 @@ def show_scenario_i(_fn, teams, season_id=None):
             st.divider()
 
     with st.spinner("분석 중..."):
-        r1 = _cached_snipe_effectiveness(team, season_id)
-        r2 = _cached_snipe_effectiveness(compare_team, season_id) if compare_team else None
+        r1 = _cached_snipe_effectiveness(team, season_id, patch_id)
+        r2 = _cached_snipe_effectiveness(compare_team, season_id, patch_id) if compare_team else None
 
     if r2:
         if "error" in r1:
@@ -1819,28 +1841,28 @@ try:
         show_home()
     elif page == "A. 밴 시 승률 영향":
         show_scenario_a(fns["ban_impact"], lists["players"],
-                        lists["player_positions"], season_id)
+                        lists["player_positions"], season_id, patch_id)
     elif page == "B. 진영별 챔피언 성향":
         show_scenario_b(fns["side_pref"], lists["players"],
-                        lists["player_positions"], season_id)
+                        lists["player_positions"], season_id, patch_id)
     elif page == "C. 패치 적응 속도":
         show_scenario_c(fns["meta_adapt"])
     elif page == "D. 저격 밴 패턴":
-        show_scenario_d(fns["snipe_ban"], lists["teams"], season_id)
+        show_scenario_d(fns["snipe_ban"], lists["teams"], season_id, patch_id)
     elif page == "E. 패치별 승리 공식":
         show_scenario_e(fns["win_formula"], lists["patches"])
     elif page == "F. 밴 내성 지수":
         show_scenario_f(fns["ban_resistance"], lists["players"],
-                        lists["player_positions"], season_id)
+                        lists["player_positions"], season_id, patch_id)
     elif page == "G. 팀 색깔 프로파일":
         show_scenario_g(fns["team_profile"], fns["all_team_profiles"],
-                        lists["teams"], season_id)
+                        lists["teams"], season_id, patch_id)
     elif page == "H. 스페셜리스트 챔피언":
         show_scenario_h(fns["specialist"], lists["players"],
-                        lists["player_positions"], season_id,
+                        lists["player_positions"], season_id, patch_id,
                         roster_fn=fns["team_roster"], teams=lists["teams"])
     elif page == "I. 저격 밴 실효성":
-        show_scenario_i(fns["snipe_effectiveness"], lists["teams"], season_id)
+        show_scenario_i(fns["snipe_effectiveness"], lists["teams"], season_id, patch_id)
 
 except Exception as e:
     st.error(f"DB 연결 실패: {e}")

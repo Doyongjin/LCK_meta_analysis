@@ -3,11 +3,12 @@
 선수 주력 챔피언이 밴됐을 때 팀 승률과 15분 지표 변화 측정
 """
 from sqlalchemy import text
-from .db import get_engine
+from .db import get_engine, build_game_filter
 
 
 def get_ban_impact(player_name: str, top_n: int = 3,
-                   season_id: str | None = None) -> dict:
+                   season_id: str | None = None,
+                   patch_id: str | None = None) -> dict:
     """
     선수의 주력 챔피언 밴 시 vs 밴 안 됐을 때 승률/지표 비교
     season_id 지정 시 해당 시즌 게임만 집계
@@ -38,15 +39,8 @@ def get_ban_impact(player_name: str, top_n: int = 3,
             return {"error": f"선수 없음: {player_name}"}
         pid = player[0]
 
-        s_filter = ""
-        base_params: dict = {"pid": pid}
-        if season_id:
-            s_filter = """AND gp.game_id IN (
-                SELECT g.game_id FROM games g
-                JOIN series s ON s.series_id = g.series_id
-                WHERE s.season_id = :sid
-            )"""
-            base_params["sid"] = season_id
+        s_filter, sf_params = build_game_filter(season_id, patch_id, alias="gp")
+        base_params: dict = {"pid": pid, **sf_params}
 
         top_champs = conn.execute(text(f"""
             SELECT gp.champion_id, COUNT(*) AS cnt

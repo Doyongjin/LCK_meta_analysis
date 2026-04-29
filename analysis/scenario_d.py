@@ -4,10 +4,11 @@
 피어리스 드래프트의 경우 게임 번호별(1/2/3경기) 밴 패턴을 따로 집계
 """
 from sqlalchemy import text
-from .db import get_engine
+from .db import get_engine, build_game_filter
 
 
-def get_snipe_ban_matrix(team_name: str, season_id: str | None = None) -> dict:
+def get_snipe_ban_matrix(team_name: str, season_id: str | None = None,
+                         patch_id: str | None = None) -> dict:
     """
     팀 내 선수별 저격 밴 현황
     season_id 지정 시 해당 시즌 게임만 집계 (선수 목록 + 챔피언 통계 모두)
@@ -72,24 +73,11 @@ def get_snipe_ban_matrix(team_name: str, season_id: str | None = None) -> dict:
         """), season_params).fetchall()
 
         # 시즌 필터용 game_id 서브쿼리
-        s_gp_filter = ""
-        s_game_filter = ""
-        if season_id:
-            s_gp_filter = """AND gp.game_id IN (
-                SELECT g.game_id FROM games g
-                JOIN series s ON s.series_id = g.series_id
-                WHERE s.season_id = :sid
-            )"""
-            s_game_filter = """AND g.game_id IN (
-                SELECT g2.game_id FROM games g2
-                JOIN series s2 ON s2.series_id = g2.series_id
-                WHERE s2.season_id = :sid
-            )"""
+        s_gp_filter, sf_params = build_game_filter(season_id, patch_id, alias="gp")
+        s_game_filter, _ = build_game_filter(season_id, patch_id, alias="g")
 
         # 우리 팀의 게임 번호별 경기 수 (피어리스만)
-        team_params: dict = {"tid": tid}
-        if season_id:
-            team_params["sid"] = season_id
+        team_params: dict = {"tid": tid, **sf_params}
 
         fearless_games_by_num = conn.execute(text(f"""
             SELECT g.game_number, COUNT(DISTINCT g.game_id) AS cnt

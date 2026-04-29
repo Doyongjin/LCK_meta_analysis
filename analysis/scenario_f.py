@@ -14,11 +14,12 @@
   - 같은 시리즈 앞 경기에서 우리 팀이 이미 픽 → 피어리스 규정상 재픽 불가 (추가)
 """
 from sqlalchemy import text
-from .db import get_engine
+from .db import get_engine, build_game_filter
 
 
 def _get_player_raw_stats(pid: int, tid: int | None, conn,
-                          season_id: str | None = None) -> dict:
+                          season_id: str | None = None,
+                          patch_id: str | None = None) -> dict:
     """선수의 원시 통계 수집 (피어리스 보정 + top3 주력 챔피언 기준)"""
     params: dict = {"pid": pid}
     team_filter     = "AND gt.team_id = :tid" if tid else ""
@@ -26,14 +27,8 @@ def _get_player_raw_stats(pid: int, tid: int | None, conn,
     if tid:
         params["tid"] = tid
 
-    s_filter = ""
-    if season_id:
-        s_filter = """AND gp.game_id IN (
-            SELECT g.game_id FROM games g
-            JOIN series s ON s.series_id = g.series_id
-            WHERE s.season_id = :sid
-        )"""
-        params["sid"] = season_id
+    s_filter, sf_params = build_game_filter(season_id, patch_id, alias="gp")
+    params.update(sf_params)
 
     champ_stats = conn.execute(text(f"""
         SELECT

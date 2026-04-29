@@ -12,11 +12,12 @@
   - 밴 횟수, 샘플 신뢰 경고 (N < 10)
 """
 from sqlalchemy import text
-from .db import get_engine
+from .db import get_engine, build_game_filter
 
 
 def get_snipe_effectiveness(team_name: str,
-                            season_id: str | None = None) -> dict:
+                            season_id: str | None = None,
+                            patch_id: str | None = None) -> dict:
     """
     팀 내 선수별 · 챔피언별 저격 밴 실효성
     반환:
@@ -68,17 +69,9 @@ def get_snipe_effectiveness(team_name: str,
         tid = team[0]
 
         # 시즌 필터
-        s_filter_game = ""
-        s_filter_series = ""
-        params_base: dict = {"tid": tid}
-        if season_id:
-            s_filter_game = """AND gt.game_id IN (
-                SELECT g.game_id FROM games g
-                JOIN series s ON s.series_id = g.series_id
-                WHERE s.season_id = :sid
-            )"""
-            s_filter_series = "AND ser.season_id = :sid"
-            params_base["sid"] = season_id
+        s_filter_game, sf_params = build_game_filter(season_id, patch_id, alias="gt")
+        s_filter_series = "AND ser.season_id = :sid" if season_id else ""
+        params_base: dict = {"tid": tid, **sf_params}
 
         # 선수 목록
         if season_id:
