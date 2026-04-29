@@ -175,16 +175,14 @@ def get_position_averages(position: str, conn) -> dict:
     분포 기준은 항상 전체 데이터 사용 — 짧은 시즌에서도 안정적인 기준값 유지
     """
     params: dict = {"pos": position}
-    s_filter = ""  # 분포 기준은 전체 데이터
 
-    # 챔프풀 + 주력 의존도
-    pool_rows = conn.execute(text(f"""
+    # 챔프풀 + 주력 의존도 (전체 데이터 기준)
+    pool_rows = conn.execute(text("""
         WITH player_champ AS (
             SELECT gp.player_id, gp.champion_id, COUNT(*) AS games
             FROM game_participants gp
             WHERE gp.position = :pos
               AND gp.champion_id IS NOT NULL
-              {s_filter}
             GROUP BY gp.player_id, gp.champion_id
         ),
         player_agg AS (
@@ -215,15 +213,13 @@ def get_position_averages(position: str, conn) -> dict:
     p10_dep   = float(pool_rows[6]) if pool_rows and pool_rows[6] else 0.15
     p90_dep   = float(pool_rows[7]) if pool_rows and pool_rows[7] else 0.60
 
-    # wr_drop / gold15_volatility: 선수별 실제 분포
-    # 각 포지션 선수의 주력 챔피언 blocked 승률 하락폭 집계
-    drop_rows = conn.execute(text(f"""
+    # wr_drop / gold15_volatility: 선수별 실제 분포 (전체 데이터 기준)
+    drop_rows = conn.execute(text("""
         WITH pos_players AS (
             SELECT DISTINCT gp.player_id
             FROM game_participants gp
             WHERE gp.position = :pos
               AND gp.champion_id IS NOT NULL
-              {s_filter}
             GROUP BY gp.player_id
             HAVING COUNT(*) >= 5
         ),
@@ -236,7 +232,6 @@ def get_position_averages(position: str, conn) -> dict:
             JOIN game_teams gt ON gt.game_id = gp.game_id AND gt.team_id = gp.team_id
             JOIN pos_players pp ON pp.player_id = gp.player_id
             WHERE gp.champion_id IS NOT NULL
-              {s_filter}
             GROUP BY gp.player_id, gp.champion_id
             HAVING COUNT(*) >= 2
         ),
@@ -248,8 +243,11 @@ def get_position_averages(position: str, conn) -> dict:
             FROM top_champs tc
             JOIN picks_bans pb ON pb.champion_id = tc.champion_id
               AND pb.phase = 'ban'
-            JOIN game_teams gt ON gt.game_id = pb.game_id AND gt.player_id = tc.player_id
+            JOIN game_participants gp2 ON gp2.game_id = pb.game_id
+              AND gp2.player_id = tc.player_id
+            JOIN game_teams gt ON gt.game_id = pb.game_id AND gt.team_id = gp2.team_id
             WHERE tc.rn = 1
+              AND pb.team_id != gp2.team_id
             GROUP BY tc.player_id
             HAVING COUNT(*) >= 1
         ),
