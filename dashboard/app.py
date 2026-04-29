@@ -839,6 +839,16 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
 - **버블 크기**: 경기 수 (크면 표본 신뢰도↑)
 - **오른쪽 위 영역**: 가장 이상적인 스페셜리스트 챔피언
 
+#### 두 가지 스페셜리스트 유형
+- **⭐ 수행 스페셜리스트**: LCK 같은 라인 평균 대비 잘함 (승률·골드·안정성 우위)
+- **🃏 조커 픽**: 본인이 LCK에서 그 챔피언을 거의 독점 사용한 깜짝 카드
+  - 조건: LCK 점유율 70%+ AND 표본별 승률 충족
+    - 본인 1경기 → 승률 100% 필수 ("한 번 꺼냈는데 통한 깜짝 픽")
+    - 본인 2경기+ → 승률 50%+ ("꾸준히 본인만 쓰는 픽")
+  - 예: Faker 스몰더, Canyon 스카너 — 평소엔 안 쓰다가 결정적 순간에 꺼내는 픽
+  - **메타 외 발굴자** — 다른 선수는 안 쓰지만 본인은 통하는 무기
+- **⭐🃏 둘 다**: 희귀하면서 잘하기까지 — 강력한 깜짝 카드
+
 #### 피어리스 보정 (⚠️ 강제픽 의심)
 피어리스 시리즈 후반 경기(2/3경기)에서 픽한 비율이 50% 이상이면 **강제픽 가능성**:
 - 1-2경기에서 주력 챔이 이미 사용됨 → 어쩔 수 없이 픽
@@ -867,38 +877,53 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
     import plotly.graph_objects as go
     import pandas as pd
 
-    specialists1 = r1["specialists"]
-    if not specialists1:
-        st.info("스페셜리스트 챔피언 없음 (최소 3게임 + LCK 평균 초과 조건 미충족)")
+    all1 = r1.get("all_champions", r1["specialists"])
+    if not all1:
+        st.info("사용한 챔피언 없음 (최소 3게임 조건 미충족)")
         return
 
     st.caption(f"포지션: {r1['position']}")
 
-    df1 = pd.DataFrame(specialists1)
+    df1 = pd.DataFrame(all1)
     df1["선수"] = player
 
-    if r2 and "error" not in r2 and r2["specialists"]:
-        df2 = pd.DataFrame(r2["specialists"])
+    if r2 and "error" not in r2 and r2.get("all_champions"):
+        df2 = pd.DataFrame(r2["all_champions"])
         df2["선수"] = compare
-        df_all = pd.concat([df1, df2], ignore_index=True)
 
-        # 두 선수 오버레이 버블 차트
-        fig = px.scatter(
-            df_all, x="excess_wr", y="gold15_advantage",
-            size="games", text="champion",
-            color="선수",
-            color_discrete_map={player: "#2196F3", compare: "#FF9800"},
-            symbol="선수",
-            title=f"{player} vs {compare} — 스페셜리스트 챔피언 비교",
-            labels={
-                "excess_wr": "초과 승률 (LCK 평균 대비)",
-                "gold15_advantage": "15분 골드 우위 (골드)",
-            },
-            size_max=40,
-        )
+        # 스페셜리스트(채움) vs 일반(테두리만) 분리해서 4개 trace로 그리기
+        color_map = {player: "#2196F3", compare: "#FF9800"}
+        fig = go.Figure()
+
+        for name, df_p in [(player, df1), (compare, df2)]:
+            for is_spec, suffix, fill_mode in [(True, "스페셜리스트", "fill"), (False, "일반", "open")]:
+                sub = df_p[df_p["is_specialist"] == is_spec]
+                if sub.empty:
+                    continue
+                marker_kwargs = dict(
+                    size=sub["games"] * 4,
+                    sizemode="diameter",
+                    sizemin=8,
+                    color=color_map[name],
+                    line=dict(width=2, color=color_map[name]),
+                )
+                if fill_mode == "open":
+                    marker_kwargs["color"] = "rgba(0,0,0,0)"
+                fig.add_trace(go.Scatter(
+                    x=sub["excess_wr"], y=sub["gold15_advantage"],
+                    mode="markers+text",
+                    text=sub["champion"], textposition="top center",
+                    marker=marker_kwargs,
+                    name=f"{name} ({suffix})",
+                ))
+
         fig.add_vline(x=0, line_dash="dash", line_color="gray", opacity=0.4)
         fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.4)
-        fig.update_traces(textposition="top center")
+        fig.update_layout(
+            title=f"{player} vs {compare} — 챔피언 비교 (채움=스페셜리스트, 테두리=일반)",
+            xaxis_title="초과 승률 (LCK 평균 대비)",
+            yaxis_title="15분 골드 우위 (골드)",
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         st.divider()
@@ -906,14 +931,23 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
 
         def _table(df, name):
             tmp = df.copy()
+            def _champ_label(r):
+                marks = ""
+                if r["is_specialist"]: marks += "⭐"
+                if r.get("is_joker_pick"): marks += "🃏"
+                return f"{marks} {r['champion']}".strip() if marks else r["champion"]
+            tmp["챔피언"] = tmp.apply(_champ_label, axis=1)
             tmp["강제픽 의심"] = tmp["likely_forced_pick"].apply(lambda x: "⚠️" if x else "")
+            tmp["LCK 점유율"] = tmp["joker_share"].apply(lambda x: f"{x:.0%}")
             display = tmp[[
-                "champion", "games", "player_wr", "lck_avg_wr", "excess_wr",
+                "챔피언", "games", "lck_total_games", "LCK 점유율",
+                "player_wr", "lck_avg_wr", "excess_wr",
                 "gold15_advantage", "gold15_stability_advantage", "specialist_score",
                 "fearless_late_games", "강제픽 의심",
             ]].copy()
             display.columns = [
-                "챔피언", "게임수", "선수 WR", "LCK 평균 WR", "초과 WR",
+                "챔피언", "게임수", "LCK 총사용", "LCK 점유율",
+                "선수 WR", "LCK 평균 WR", "초과 WR",
                 "골드 우위", "안정성 우위", "점수",
                 "피어리스 후반픽", "강제픽 의심",
             ]
@@ -924,7 +958,7 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
             _table(df1, player)
         with col2:
             _table(df2, compare)
-        st.caption("⚠️ = 피어리스 후반(2/3경기) 픽이 50% 이상 → 강제 픽일 가능성, 스페셜리스트 신뢰도 낮음")
+        st.caption("⭐ = 수행 스페셜리스트 (평균 대비 잘함) / 🃏 = 조커 픽 (LCK 70%+ 독점, 1경기는 승률 100%·2경기+는 50%+) / ⚠️ = 피어리스 후반 픽 50%+ (강제 픽 의심)")
 
     else:
         # 단일 선수
@@ -948,22 +982,31 @@ def show_scenario_h(fn, players, player_positions, season_id=None):
         st.caption("색이 초록일수록 평균보다 골드 변동이 적음 / 버블 크기 = 플레이 횟수")
 
         df1_disp = df1.copy()
+        def _champ_label(r):
+            marks = ""
+            if r["is_specialist"]: marks += "⭐"
+            if r.get("is_joker_pick"): marks += "🃏"
+            return f"{marks} {r['champion']}".strip() if marks else r["champion"]
+        df1_disp["챔피언"] = df1_disp.apply(_champ_label, axis=1)
         df1_disp["강제픽 의심"] = df1_disp["likely_forced_pick"].apply(lambda x: "⚠️" if x else "")
+        df1_disp["LCK 점유율"] = df1_disp["joker_share"].apply(lambda x: f"{x:.0%}")
         display_df = df1_disp[[
-            "champion", "games", "player_wr", "lck_avg_wr", "excess_wr",
+            "챔피언", "games", "lck_total_games", "LCK 점유율",
+            "player_wr", "lck_avg_wr", "excess_wr",
             "player_gold15", "lck_avg_gold15", "gold15_advantage",
             "player_gold15_stddev", "lck_avg_gold15_stddev", "gold15_stability_advantage",
             "specialist_score",
             "fearless_late_games", "강제픽 의심",
         ]].copy()
         display_df.columns = [
-            "챔피언", "게임수", "선수 승률", "LCK 평균 승률", "초과 승률",
+            "챔피언", "게임수", "LCK 총사용", "LCK 점유율",
+            "선수 승률", "LCK 평균 승률", "초과 승률",
             "선수 골드15", "LCK 평균 골드15", "골드 우위",
             "선수 골드 표준편차", "LCK 평균 표준편차", "안정성 우위", "스페셜리스트 점수",
             "피어리스 후반픽", "강제픽 의심",
         ]
         st.dataframe(display_df, hide_index=True)
-        st.caption("⚠️ = 피어리스 후반(2/3경기) 픽이 50% 이상 → 강제 픽일 가능성, 스페셜리스트 신뢰도 낮음")
+        st.caption("⭐ = 수행 스페셜리스트 / 🃏 = 조커 픽 (LCK 70%+ 독점, 1경기는 승률 100%·2경기+는 50%+) / ⚠️ = 피어리스 후반 픽 50%+ (강제 픽 의심)")
 
 
 # ─────────────────────────────────────────────
