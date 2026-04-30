@@ -105,13 +105,15 @@ with st.sidebar:
                 """), {"sid": season_id}
             ).fetchall()]
         if _patches:
-            _patch_options = _patches + ["전체 (시즌 전체)"]
+            _patch_display_map = {p: f"{int(p.split('.')[0]) + 10}.{p.split('.')[1]}" if '.' in p else p for p in _patches}
+            _patch_options_display = [_patch_display_map[p] for p in _patches] + ["전체 (시즌 전체)"]
+            _patch_internal = {v: k for k, v in _patch_display_map.items()}
             selected_patch = st.selectbox(
                 "패치 버전",
-                options=_patch_options,
+                options=_patch_options_display,
                 index=0,  # 기본값: 최신 패치
             )
-            patch_id = None if selected_patch == "전체 (시즌 전체)" else selected_patch
+            patch_id = None if selected_patch == "전체 (시즌 전체)" else _patch_internal.get(selected_patch, selected_patch)
 
     st.divider()
 
