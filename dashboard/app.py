@@ -52,19 +52,24 @@ with st.sidebar:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as _tf:
                     _tf.write(_uploaded.read())
                     _tmp_path = pathlib.Path(_tf.name)
+                _upload_ok = False
                 with st.spinner("DB에 데이터 로드 중... (수분 소요)"):
                     try:
                         from etl.load_to_db import run_etl
                         run_etl(2026, csv_path=str(_tmp_path))
-                        st.success("✅ 데이터 로드 완료!")
+                        _upload_ok = True
                     except Exception as e:
-                        st.error(f"ETL 오류: {str(e)[:500]}")
+                        import traceback
+                        st.error(f"ETL 오류: {str(e)}")
+                        st.code(traceback.format_exc(), language="text")
                     finally:
                         _tmp_path.unlink(missing_ok=True)
-                st.cache_data.clear()
-                st.cache_resource.clear()
-                st.session_state["last_db_refresh"] = _time.time()
-                st.rerun()
+                if _upload_ok:
+                    st.success("✅ 데이터 로드 완료!")
+                    st.cache_data.clear()
+                    st.cache_resource.clear()
+                    st.session_state["last_db_refresh"] = _time.time()
+                    st.rerun()
 
         if st.button("⬇️ 데이터 다운로드 + DB 로드", use_container_width=True):
             _correct_pw = st.secrets.get("ADMIN_PASSWORD", "")
@@ -81,18 +86,22 @@ with st.sidebar:
                 if dl_errors:
                     st.warning(f"다운로드 일부 실패 (오늘 파일 없을 수 있음): {dl_errors[0][:200]}")
 
+                _dl_ok = False
                 with st.spinner("DB에 데이터 로드 중... (수분 소요)"):
                     try:
                         from etl.load_to_db import run_etl
                         run_etl(2026)
-                        st.success("✅ 데이터 로드 완료!")
+                        _dl_ok = True
                     except Exception as e:
-                        st.error(f"ETL 오류: {str(e)[:500]}")
-
-                st.cache_data.clear()
-                st.cache_resource.clear()
-                st.session_state["last_db_refresh"] = _time.time()
-                st.rerun()
+                        import traceback
+                        st.error(f"ETL 오류: {str(e)}")
+                        st.code(traceback.format_exc(), language="text")
+                if _dl_ok:
+                    st.success("✅ 데이터 로드 완료!")
+                    st.cache_data.clear()
+                    st.cache_resource.clear()
+                    st.session_state["last_db_refresh"] = _time.time()
+                    st.rerun()
     else:
         _rem_h = int(_remaining // 3600)
         _rem_m = int((_remaining % 3600) // 60)
