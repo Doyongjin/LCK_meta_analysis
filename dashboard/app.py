@@ -35,6 +35,37 @@ with st.sidebar:
 
     if _remaining <= 0:
         _pw_input = st.text_input("관리자 비밀번호", type="password", key="admin_pw")
+
+        # CSV 직접 업로드
+        _uploaded = st.file_uploader(
+            "CSV 직접 업로드 (2026)",
+            type="csv",
+            key="csv_upload",
+            help="Oracle's Elixir에서 직접 받은 2026_LoL_esports_match_data_from_OraclesElixir.csv 업로드",
+        )
+        if _uploaded is not None:
+            _correct_pw = st.secrets.get("ADMIN_PASSWORD", "")
+            if not _pw_input or _pw_input != _correct_pw:
+                st.warning("비밀번호를 입력하면 업로드한 파일로 DB를 갱신합니다.")
+            elif st.button("📂 업로드 파일로 DB 로드", use_container_width=True, key="upload_run"):
+                import tempfile, pathlib
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".csv") as _tf:
+                    _tf.write(_uploaded.read())
+                    _tmp_path = pathlib.Path(_tf.name)
+                with st.spinner("DB에 데이터 로드 중... (수분 소요)"):
+                    try:
+                        from etl.load_to_db import run_etl
+                        run_etl(2026, csv_path=str(_tmp_path))
+                        st.success("✅ 데이터 로드 완료!")
+                    except Exception as e:
+                        st.error(f"ETL 오류: {str(e)[:500]}")
+                    finally:
+                        _tmp_path.unlink(missing_ok=True)
+                st.cache_data.clear()
+                st.cache_resource.clear()
+                st.session_state["last_db_refresh"] = _time.time()
+                st.rerun()
+
         if st.button("⬇️ 데이터 다운로드 + DB 로드", use_container_width=True):
             _correct_pw = st.secrets.get("ADMIN_PASSWORD", "")
             if not _pw_input or _pw_input != _correct_pw:

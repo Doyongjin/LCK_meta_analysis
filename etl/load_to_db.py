@@ -451,17 +451,18 @@ def _delete_season_data(conn, year: int):
     print(f"  player_team_history 삭제: {r.rowcount}행")
 
 
-def run_etl(year: int):
-    csv_path = _csv_path(year)
-    if not csv_path.exists():
-        print(f"[건너뜀] 파일 없음: {csv_path}")
+def run_etl(year: int, csv_path: str | None = None):
+    path = Path(csv_path) if csv_path else _csv_path(year)
+    if not path.exists():
+        print(f"[건너뜀] 파일 없음: {path}")
         return
+    csv_path = path
 
     print(f"\n{'='*40}")
     print(f"{year}년 ETL 시작")
     print(f"{'='*40}")
 
-    df = pd.read_csv(csv_path, low_memory=False)
+    df = pd.read_csv(path, low_memory=False)
     df = df[df['league'] == 'LCK'].copy()
     print(f"LCK 행 수: {len(df)}")
 
