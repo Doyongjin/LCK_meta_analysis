@@ -1901,9 +1901,15 @@ def show_scenario_j(season_id=None, patch_id=None):
     position_sel = st.selectbox("포지션 필터", POS_OPTIONS, key="j_pos")
     position = None if position_sel == "전체" else position_sel
 
+    # 필터가 바뀌면 이전 결과 초기화
+    _cur_filters = {"season_id": season_id, "patch_id": patch_id, "position": position}
+    if st.session_state.get("j_filters") != _cur_filters:
+        st.session_state.pop("j_result", None)
+
     if st.button("분석", key="j_run"):
         with st.spinner("분석 중..."):
             st.session_state["j_result"] = _cached_champion_meta(season_id, patch_id, position)
+            st.session_state["j_filters"] = _cur_filters
 
     if "j_result" not in st.session_state:
         return
