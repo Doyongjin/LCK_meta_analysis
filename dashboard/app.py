@@ -168,6 +168,7 @@ with st.sidebar:
             "G. 팀 색깔 프로파일",
             "H. 스페셜리스트 챔피언",
             "I. 저격 밴 실효성",
+            "J. 챔피언 메타 분석",
         ],
         label_visibility="collapsed",
     )
@@ -184,6 +185,7 @@ def load_fns():
     from analysis.scenario_g import get_team_profile, get_all_team_profiles
     from analysis.scenario_h import get_specialist_champions, get_team_roster_by_games
     from analysis.scenario_i import get_snipe_effectiveness
+    from analysis.scenario_j import get_champion_meta
     return {
         "ban_impact": get_ban_impact,
         "side_pref": get_side_champion_preference,
@@ -196,6 +198,7 @@ def load_fns():
         "specialist": get_specialist_champions,
         "team_roster": get_team_roster_by_games,
         "snipe_effectiveness": get_snipe_effectiveness,
+        "champion_meta": get_champion_meta,
     }
 
 
@@ -1871,6 +1874,132 @@ def show_scenario_i(_fn, teams, season_id=None, patch_id=None):
 
 
 # ─────────────────────────────────────────────
+# J. 챔피언 메타 분석
+# ─────────────────────────────────────────────
+@st.cache_data(ttl=3600)
+def _cached_champion_meta(season_id, patch_id, position):
+    from analysis.scenario_j import get_champion_meta
+    return get_champion_meta(season_id, patch_id, position)
+
+
+def show_scenario_j(season_id=None, patch_id=None):
+    st.title("J. 챔피언 메타 분석")
+
+    with st.expander("📖 해석 가이드", expanded=False):
+        st.markdown("""
+- **픽률**: 전체 경기 중 해당 챔피언이 픽된 비율
+- **승률**: 해당 챔피언을 픽했을 때 팀 승률
+- **밴율**: 전체 경기 중 밴된 비율
+- **출현율(픽+밴)**: 드래프트에 등장한 비율 — 메타 영향력의 종합 지표
+- **세트별 분리**: 피어리스 드래프트에서 1/2/3세트 픽·밴 패턴이 다름
+  - 후반 세트로 갈수록 앞 경기 사용 챔피언이 제외되어 픽·밴 풀이 좁아짐
+""")
+
+    POS_OPTIONS = ["전체", "top", "jng", "mid", "bot", "sup"]
+    position_sel = st.selectbox("포지션 필터", POS_OPTIONS, key="j_pos")
+    position = None if position_sel == "전체" else position_sel
+
+    if not st.button("분석", key="j_run"):
+        return
+
+    import pandas as pd
+
+    with st.spinner("분석 중..."):
+        result = _cached_champion_meta(season_id, patch_id, position)
+
+    champs = result["champions"]
+    if not champs:
+        st.info("데이터 없음")
+        return
+
+    st.caption(f"총 {result['total_games']}경기 기준")
+
+    # ── 메인 테이블 ──────────────────────────────────
+    rows = []
+    for c in champs:
+        rows.append({
+            "챔피언": c["champion"],
+            "포지션": c["position"] or "-",
+            "픽수": c["picks"],
+            "픽률": f"{c['pick_rate']:.1%}",
+            "승률": f"{c['win_rate']:.1%}" if c["win_rate"] is not None else "-",
+            "밴수": c["bans"],
+            "밴율": f"{c['ban_rate']:.1%}",
+            "출현율": f"{c['presence_rate']:.1%}",
+        })
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+
+    # ── 챔피언 상세 ──────────────────────────────────
+    st.divider()
+    champ_names = [c["champion"] for c in champs]
+    selected = st.selectbox("챔피언 상세 보기", ["(선택)"] + champ_names, key="j_detail")
+    if selected == "(선택)":
+        return
+
+    cd = next((c for c in champs if c["champion"] == selected), None)
+    if not cd:
+        return
+
+    col_icon, col_title = st.columns([1, 9])
+    with col_icon:
+        if cd["icon_url"]:
+            st.image(cd["icon_url"], width=56)
+    with col_title:
+        pos_label = cd["position"] or "-"
+        st.subheader(f"{selected}  ({pos_label})")
+        st.caption(
+            f"픽 {cd['picks']}회 ({cd['pick_rate']:.1%}) · "
+            f"승률 {cd['win_rate']:.1%}" if cd['win_rate'] is not None
+            else f"픽 {cd['picks']}회 ({cd['pick_rate']:.1%}) · 승률 -"
+        )
+
+    # 세트별 테이블
+    by_game = cd.get("by_game", {})
+    if by_game:
+        st.markdown("#### 세트별 픽·밴")
+        game_rows = []
+        for gn, d in sorted(by_game.items(), key=lambda x: int(x[0])):
+            game_rows.append({
+                "세트": f"{gn}세트",
+                "픽수": d["picks"],
+                "픽률": f"{d['pick_rate']:.1%}",
+                "승률": f"{d['win_rate']:.1%}" if d["win_rate"] is not None else "-",
+                "밴수": d["bans"],
+                "밴율": f"{d['ban_rate']:.1%}",
+            })
+        st.dataframe(pd.DataFrame(game_rows), hide_index=True, use_container_width=True)
+
+    # 선수·팀 통계
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.markdown("#### 자주 픽한 선수")
+        if cd["top_pickers"]:
+            for p in cd["top_pickers"]:
+                st.write(f"**{p['player']}** ({p['team']})")
+                st.caption(f"{p['picks']}회 · 승률 {p['win_rate']:.1%}")
+        else:
+            st.caption("데이터 없음")
+
+    with c2:
+        st.markdown("#### 승률 높은 선수")
+        st.caption("(최소 2경기)")
+        if cd["top_winners"]:
+            for p in cd["top_winners"]:
+                st.write(f"**{p['player']}** ({p['team']})")
+                st.caption(f"{p['picks']}회 · 승률 {p['win_rate']:.1%}")
+        else:
+            st.caption("데이터 없음 (2경기 이상 없음)")
+
+    with c3:
+        st.markdown("#### 가장 많이 밴한 팀")
+        if cd["top_banners"]:
+            for t in cd["top_banners"]:
+                st.write(f"**{t['team']}** — {t['bans']}회")
+        else:
+            st.caption("데이터 없음")
+
+
+# ─────────────────────────────────────────────
 # 메인 렌더링
 # ─────────────────────────────────────────────
 try:
@@ -1903,6 +2032,8 @@ try:
                         roster_fn=fns["team_roster"], teams=lists["teams"])
     elif page == "I. 저격 밴 실효성":
         show_scenario_i(fns["snipe_effectiveness"], lists["teams"], season_id, patch_id)
+    elif page == "J. 챔피언 메타 분석":
+        show_scenario_j(season_id, patch_id)
 
 except Exception as e:
     st.error(f"DB 연결 실패: {e}")
