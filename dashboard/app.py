@@ -44,8 +44,7 @@ with st.sidebar:
                 with st.spinner("Oracle's Elixir 데이터 다운로드 중..."):
                     try:
                         from etl.download_oracles_elixir import download_csv
-                        for y in [2024, 2025, 2026]:
-                            download_csv(y)
+                        download_csv(2026)
                     except Exception as e:
                         dl_errors.append(str(e))
                 if dl_errors:
@@ -54,8 +53,7 @@ with st.sidebar:
                 with st.spinner("DB에 데이터 로드 중... (수분 소요)"):
                     try:
                         from etl.load_to_db import run_etl
-                        for y in [2024, 2025, 2026]:
-                            run_etl(y)
+                        run_etl(2026)
                         st.success("✅ 데이터 로드 완료!")
                     except Exception as e:
                         st.error(f"ETL 오류: {str(e)[:500]}")

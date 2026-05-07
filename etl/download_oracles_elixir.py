@@ -73,5 +73,4 @@ def download_csv(year: int) -> Path | None:
 
 
 if __name__ == "__main__":
-    for year in [2024, 2025, 2026]:
-        download_csv(year)
+    download_csv(2026)
