@@ -130,7 +130,7 @@ def get_team_profile(team_name: str, season_id: str | None = None,
             ).fetchone()
             if not pid_row:
                 continue
-            raw = _get_player_raw_stats(pid_row[0], tid, conn2, season_id)
+            raw = _get_player_raw_stats(pid_row[0], tid, conn2, season_id, patch_id)
             pos_avg = get_position_averages(pos, conn2)
             score, _ = _compute_ban_resistance(raw, pos_avg)
             br_scores.append(score)
