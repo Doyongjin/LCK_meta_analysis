@@ -6,6 +6,7 @@ sqlalchemy
 pandas
 requests
 beautifulsoup4
+gdown
 
 # 분석
 scipy
