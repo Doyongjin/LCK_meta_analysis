@@ -1895,18 +1895,20 @@ def show_scenario_j(season_id=None, patch_id=None):
   - 후반 세트로 갈수록 앞 경기 사용 챔피언이 제외되어 픽·밴 풀이 좁아짐
 """)
 
+    import pandas as pd
+
     POS_OPTIONS = ["전체", "top", "jng", "mid", "bot", "sup"]
     position_sel = st.selectbox("포지션 필터", POS_OPTIONS, key="j_pos")
     position = None if position_sel == "전체" else position_sel
 
-    if not st.button("분석", key="j_run"):
+    if st.button("분석", key="j_run"):
+        with st.spinner("분석 중..."):
+            st.session_state["j_result"] = _cached_champion_meta(season_id, patch_id, position)
+
+    if "j_result" not in st.session_state:
         return
 
-    import pandas as pd
-
-    with st.spinner("분석 중..."):
-        result = _cached_champion_meta(season_id, patch_id, position)
-
+    result = st.session_state["j_result"]
     champs = result["champions"]
     if not champs:
         st.info("데이터 없음")
@@ -1947,11 +1949,8 @@ def show_scenario_j(season_id=None, patch_id=None):
     with col_title:
         pos_label = cd["position"] or "-"
         st.subheader(f"{selected}  ({pos_label})")
-        st.caption(
-            f"픽 {cd['picks']}회 ({cd['pick_rate']:.1%}) · "
-            f"승률 {cd['win_rate']:.1%}" if cd['win_rate'] is not None
-            else f"픽 {cd['picks']}회 ({cd['pick_rate']:.1%}) · 승률 -"
-        )
+        wr_str = f"{cd['win_rate']:.1%}" if cd["win_rate"] is not None else "-"
+        st.caption(f"픽 {cd['picks']}회 ({cd['pick_rate']:.1%}) · 승률 {wr_str}")
 
     # 세트별 테이블
     by_game = cd.get("by_game", {})
