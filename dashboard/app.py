@@ -1933,7 +1933,7 @@ def show_scenario_j(season_id=None, patch_id=None):
 
     # ── 챔피언 상세 ──────────────────────────────────
     st.divider()
-    champ_names = [c["champion"] for c in champs]
+    champ_names = [c["champion"] for c in champs if c["picks"] > 0]
     selected = st.selectbox("챔피언 상세 보기", ["(선택)"] + champ_names, key="j_detail")
     if selected == "(선택)":
         return

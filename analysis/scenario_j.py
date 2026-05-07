@@ -256,7 +256,11 @@ def get_champion_meta(season_id: str | None = None,
             "top_banners": top_banners,
         })
 
-    # 밴만 된 챔피언 추가
+    # 밴만 된 챔피언 추가 (포지션 필터 없을 때만 — 밴에는 포지션 정보가 없음)
+    if position:
+        champions.sort(key=lambda x: -x["presence_rate"])
+        return {"total_games": total_games, "champions": champions}
+
     for cid, bans in ban_map.items():
         if cid in processed:
             continue
